@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chat Widget Test Page</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+            line-height: 1.6;
+        }
+        h1 {
+            color: #333;
+        }
+        .info {
+            background: #f4f4f4;
+            padding: 15px;
+            border-radius: 5px;
+            margin: 20px 0;
+        }
+        code {
+            background: #e8e8e8;
+            padding: 2px 6px;
+            border-radius: 3px;
+        }
+    </style>
+</head>
+<body>
+    <h1>Chat Widget Test Page</h1>
+    
+    <div class="info">
+        <p><strong>Instructions:</strong></p>
+        <ol>
+            <li>Replace <code>"your-tenant-id"</code> below with your actual tenant ID</li>
+            <li>Save this file</li>
+            <li>Open it in your browser</li>
+            <li>Look for the blue chat bubble in the bottom-right corner</li>
+        </ol>
+    </div>
+
+    <h2>Your Content Here</h2>
+    <p>This is a test page to demonstrate the chat widget.</p>
+    <p>The widget will appear as a floating bubble in the corner you specified.</p>
+
+    <!-- ============================================ -->
+    <!-- CHAT WIDGET - Copy this to your website -->
+    <!-- ============================================ -->
+    
+    <script>
+      window.ChatWidgetConfig = {
+        tenantId: "your-tenant-id",  // ⚠️ CHANGE THIS to your actual tenant ID
+        position: "bottom-right"      // Options: "bottom-right", "bottom-left", "top-right", "top-left"
+      };
+    </script>
+    
+    <script src="https://webchat.amoiq.com/widget.v1.0.0.js" async></script>
+    
+    <!-- ============================================ -->
+    <!-- END OF CHAT WIDGET CODE -->
+    <!-- ============================================ -->
+
+</body>
+</html>
+
