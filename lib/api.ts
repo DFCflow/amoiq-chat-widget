@@ -55,7 +55,6 @@ export class ChatAPI {
       const response = await fetch(`${this.baseUrl}/api/chat/messages`, {
         method: 'GET',
         headers: this.getHeaders(),
-        credentials: 'include', // Include cookies if needed
       });
 
       if (!response.ok) {
@@ -78,7 +77,6 @@ export class ChatAPI {
       const response = await fetch(`${this.baseUrl}/api/chat/messages`, {
         method: 'POST',
         headers: this.getHeaders(),
-        credentials: 'include',
         body: JSON.stringify({
           text,
           tenantId: this.tenantId,
@@ -111,7 +109,6 @@ export class ChatAPI {
       const response = await fetch(`${this.baseUrl}/api/chat/session`, {
         method: 'POST',
         headers: this.getHeaders(),
-        credentials: 'include',
         body: JSON.stringify({
           tenantId: this.tenantId,
         }),

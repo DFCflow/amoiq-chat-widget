@@ -43,10 +43,16 @@ export class ChatWebSocket {
     try {
       console.log('[Socket.io] Connecting to:', this.wsUrl, 'with tenantId:', this.tenantId);
       
+      // Get API key from environment for authentication
+      const apiKey = process.env.NEXT_PUBLIC_GATEWAY_API_KEY || process.env.NEXT_PUBLIC_API_KEY;
+      
       this.socket = io(this.wsUrl, {
         transports: ['websocket', 'polling'],
         query: {
           tenantId: this.tenantId,
+        },
+        auth: {
+          token: apiKey,
         },
         reconnection: true,
         reconnectionAttempts: this.maxReconnectAttempts,
