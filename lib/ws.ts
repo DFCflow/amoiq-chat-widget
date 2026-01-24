@@ -1,9 +1,11 @@
 /**
  * Socket.io client for real-time chat
  * Handles connection, message sending, and event callbacks
+ * Production-ready with session management and user identification
  */
 
 import { io, Socket } from 'socket.io-client';
+import { getSessionInfo, refreshSession } from './session';
 
 export interface OnlineUser {
   userId: string;
@@ -32,6 +34,13 @@ export interface WebsiteInfo {
   siteId?: string;
 }
 
+export interface UserInfo {
+  name?: string;
+  email?: string;
+  phone?: string;
+  [key: string]: any; // Allow additional user properties
+}
+
 export class ChatWebSocket {
   private tenantId: string;
   private socket: Socket | null = null;
@@ -42,12 +51,23 @@ export class ChatWebSocket {
   private wsUrl: string;
   private websiteInfo: WebsiteInfo;
   private isAdmin: boolean;
+  private userId?: string; // For logged-in users
+  private userInfo?: UserInfo; // User information
 
-  constructor(tenantId: string, callbacks: WebSocketCallbacks = {}, websiteInfo?: WebsiteInfo, isAdmin: boolean = false) {
+  constructor(
+    tenantId: string,
+    callbacks: WebSocketCallbacks = {},
+    websiteInfo?: WebsiteInfo,
+    isAdmin: boolean = false,
+    userId?: string,
+    userInfo?: UserInfo
+  ) {
     this.tenantId = tenantId;
     this.callbacks = callbacks;
     this.websiteInfo = websiteInfo || this.getWebsiteInfo();
     this.isAdmin = isAdmin;
+    this.userId = userId;
+    this.userInfo = userInfo;
     
     // Always use Gateway URL for WebSocket connections
     // Gateway handles authentication and proxies to WebSocket Server
@@ -195,20 +215,56 @@ export class ChatWebSocket {
   }
 
   /**
+   * Set user information (for logged-in users)
+   */
+  setUser(userId: string, userInfo?: UserInfo): void {
+    this.userId = userId;
+    this.userInfo = userInfo;
+  }
+
+  /**
+   * Clear user information (logout)
+   */
+  clearUser(): void {
+    this.userId = undefined;
+    this.userInfo = undefined;
+  }
+
+  /**
    * Send a message through Socket.io
+   * Supports both anonymous and logged-in users
+   * Backend determines user type based on payload (userId presence)
    */
   async sendMessage(text: string): Promise<void> {
     if (!this.socket || !this.socket.connected) {
       throw new Error('Socket.io is not connected');
     }
 
-    const message = {
+    // Get session info (sessionId + fingerprint)
+    const sessionInfo = getSessionInfo();
+    
+    // Refresh session to extend expiration
+    refreshSession();
+
+    // Prepare message payload
+    const message: any = {
       type: 'message',
       text,
       tenantId: this.tenantId,
       timestamp: new Date().toISOString(),
+      sessionId: sessionInfo.sessionId,
+      fingerprint: sessionInfo.fingerprint,
       ...this.websiteInfo, // Include domain, origin, url, referrer, siteId
     };
+
+    // Add user identification if logged in
+    if (this.userId) {
+      message.userId = this.userId;
+      if (this.userInfo) {
+        message.userInfo = this.userInfo;
+      }
+    }
+    // If no userId, backend treats as anonymous user (uses sessionId + fingerprint)
 
     // Emit message event - adjust event name based on your server
     this.socket.emit('message', message);

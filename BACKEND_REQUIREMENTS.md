@@ -8,15 +8,16 @@ The chat widget is a **frontend-only** component. To work properly, it needs the
 **Purpose:** Send/receive messages, manage conversations
 
 **Endpoints needed:**
-- `GET /api/chat/messages` - Fetch message history
-- `POST /api/chat/messages` - Send a new message
-- `POST /api/chat/session` - Initialize a chat session
+- `POST /webchat/message` - Send a message (single endpoint for both anonymous and logged-in users)
+- `GET /api/chat/messages` - Fetch message history (by sessionId or userId)
+- `POST /api/chat/anonymous-token` - Generate JWT token for anonymous users
 
 **What it does:**
-- Receives messages from widget
-- Saves messages to database
-- Returns message history
-- Handles authentication (tenant-scoped)
+- Receives messages from widget with sessionId/fingerprint (anonymous) or userId (logged-in)
+- Determines user type based on payload (if userId present = logged-in, else = anonymous)
+- Saves messages to database with proper user identification
+- Returns message history based on sessionId or userId
+- Handles session management and conversation continuity
 
 ### 2. **WebSocket Server** (Required for real-time)
 **Purpose:** Real-time message delivery

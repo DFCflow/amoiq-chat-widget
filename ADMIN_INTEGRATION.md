@@ -361,10 +361,51 @@ socket.on('message', async (data) => {
 
 **Responsibilities:**
 - **JWT Generation**: Generate JWT tokens for anonymous users (has `JWT_SECRET`)
-- **HTTP Endpoints**: Implement endpoints like `GET /api/chat/online-users`
+- **HTTP Endpoints**: 
+  - `POST /webchat/message` - Single endpoint for sending messages (handles both anonymous and logged-in users)
+  - `GET /api/chat/messages` - Fetch conversation history (by sessionId or userId)
+  - `GET /api/chat/online-users` - Get list of online users
+- **Session Management**: Handle sessionId and fingerprint for anonymous users
+- **User Identification**: Determine user type based on payload (userId presence)
 - **Redis Queries**: Query online users from Redis (key pattern: `online_users:{tenantId}`)
 - **Return data**: Return formatted list of online users
 - **Tenant scoping**: Support tenant-scoped queries via `X-Tenant-ID` header or query params
+
+**Message Endpoint: `POST /webchat/message`**
+
+Single endpoint that handles both anonymous and logged-in users. Backend determines user type based on payload:
+
+- **If `userId` present** → Logged-in user
+- **If no `userId`** → Anonymous user (uses sessionId + fingerprint)
+
+**Request Payload:**
+```json
+{
+  "text": "Hello, I need help",
+  "tenantId": "tenant-123",
+  "sessionId": "session-789-abc123",    // Always sent (for anonymous users)
+  "fingerprint": "a1b2c3d4e5f6g7h8",     // Always sent (for user identification)
+  "userId": "user-456",                  // Optional: If present = logged-in user
+  "userInfo": {                          // Optional: Only for logged-in users
+    "name": "John Doe",
+    "email": "john@example.com"
+  },
+  "domain": "example.com",
+  "origin": "https://example.com",
+  "url": "https://example.com/page",
+  "referrer": "https://google.com",
+  "siteId": "site-123"
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "messageId": "msg-123",
+  "sessionId": "session-789-abc123"  // May return updated sessionId
+}
+```
 
 **Endpoint specification:**
 - **URL**: `GET /api/chat/online-users?tenantId=xxx`

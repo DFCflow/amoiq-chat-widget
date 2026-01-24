@@ -2,12 +2,21 @@
 
 import { useEffect, useState, useRef } from 'react';
 import { getTenantId } from '@/lib/tenant';
-import { ChatAPI } from '@/lib/api';
+import { ChatAPI, UserInfo } from '@/lib/api';
 import { ChatWebSocket } from '@/lib/ws';
+import { getSessionInfo, hasValidSession } from '@/lib/session';
 import styles from './styles.module.css';
 
 // Force dynamic rendering - no caching
 export const dynamic = 'force-dynamic';
+
+interface Message {
+  id: string;
+  text: string;
+  sender: 'user' | 'bot' | 'agent';
+  timestamp: string;
+  deliveryStatus?: 'pending' | 'delivered' | 'failed';
+}
 
 export default function EmbedPage() {
   const [tenantId, setTenantId] = useState<string | null>(null);
@@ -72,6 +81,46 @@ export default function EmbedPage() {
     return {};
   };
 
+  /**
+   * Get user info from URL params or parent window
+   * Supports logged-in users with userId and userInfo
+   */
+  const getUserInfo = (): { userId?: string; userInfo?: UserInfo } => {
+    const params = new URLSearchParams(window.location.search);
+    
+    // Try to get from URL params
+    const userId = params.get('userId');
+    const userName = params.get('userName');
+    const userEmail = params.get('userEmail');
+    const userPhone = params.get('userPhone');
+    
+    if (userId) {
+      const userInfo: UserInfo = {};
+      if (userName) userInfo.name = userName;
+      if (userEmail) userInfo.email = userEmail;
+      if (userPhone) userInfo.phone = userPhone;
+      
+      return { userId, userInfo: Object.keys(userInfo).length > 0 ? userInfo : undefined };
+    }
+    
+    // Try to get from parent window (if embedded)
+    if (window.parent && window.parent !== window) {
+      try {
+        const parentConfig = (window.parent as any).ChatWidgetConfig;
+        if (parentConfig?.userId) {
+          return {
+            userId: parentConfig.userId,
+            userInfo: parentConfig.userInfo,
+          };
+        }
+      } catch (e) {
+        // Cross-origin - can't access
+      }
+    }
+    
+    return {};
+  };
+
   useEffect(() => {
     // Get tenant ID from URL params (support both 'tenantId' and 'tenant')
     const params = new URLSearchParams(window.location.search);
@@ -89,10 +138,21 @@ export default function EmbedPage() {
     const websiteInfo = getWebsiteInfo();
     console.log('[Widget] Website info:', websiteInfo);
     
-    // Initialize API client with website info
-    apiRef.current = new ChatAPI(tid, websiteInfo);
+    // Get user info (for logged-in users)
+    const { userId, userInfo } = getUserInfo();
+    const sessionInfo = getSessionInfo();
     
-    // Initialize WebSocket with website info
+    console.log('[Widget] Session info:', {
+      sessionId: sessionInfo.sessionId,
+      fingerprint: sessionInfo.fingerprint,
+      hasValidSession: hasValidSession(),
+      userId: userId || 'anonymous',
+    });
+    
+    // Initialize API client with website info and user info
+    apiRef.current = new ChatAPI(tid, websiteInfo, userId, userInfo);
+    
+    // Initialize WebSocket with website info and user info
     wsRef.current = new ChatWebSocket(tid, {
       onMessage: (message) => {
         setMessages((prev) => {
@@ -152,17 +212,35 @@ export default function EmbedPage() {
         // Allow input even if WebSocket fails - will use HTTP API fallback
         setIsConnected(false);
       },
-    });
+    }, websiteInfo, false, userId, userInfo);
 
-    // Load initial messages
-    apiRef.current.getMessages().then((initialMessages) => {
-      setMessages(initialMessages);
-    }).catch((error) => {
-      console.error('Failed to load messages:', error);
-      setIsLoading(false);
-    });
+    // Load conversation history on mount
+    const loadConversationHistory = async () => {
+      if (!apiRef.current) return;
+      
+      try {
+        console.log('[Widget] Loading conversation history...');
+        const history = await apiRef.current.getMessages();
+        
+        if (history.length > 0) {
+          console.log(`[Widget] Loaded ${history.length} messages from history`);
+          setMessages(history);
+        } else {
+          console.log('[Widget] No conversation history found');
+        }
+      } catch (error) {
+        console.error('[Widget] Failed to load conversation history:', error);
+        // Don't block UI - continue even if history fails to load
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    // Load history after a short delay to allow WebSocket to connect first
+    const historyTimer = setTimeout(loadConversationHistory, 500);
 
     return () => {
+      clearTimeout(historyTimer);
       wsRef.current?.disconnect();
     };
   }, []);
@@ -333,13 +411,5 @@ export default function EmbedPage() {
       </div>
     </div>
   );
-}
-
-interface Message {
-  id: string;
-  text: string;
-  sender: 'user' | 'bot' | 'agent';
-  timestamp: string;
-  deliveryStatus?: 'pending' | 'delivered' | 'failed';
 }
 
