@@ -35,7 +35,7 @@ All documentation has been verified against the code implementation. The followi
 2. **HTTP Endpoints** - 100% match
    - `POST /webchat/message` ✅
    - `GET /api/chat/messages` ✅
-   - `GET /api/chat/online-users` ✅
+   - `GET /api/webchat/online-users` ✅
    - `POST /api/chat/anonymous-token` ✅
 
 3. **WebSocket Events** - 100% match

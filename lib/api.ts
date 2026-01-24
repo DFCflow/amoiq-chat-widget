@@ -345,10 +345,11 @@ export class ChatAPI {
   /**
    * Get list of online users for the tenant
    * Requires admin authentication
+   * Gateway endpoint: GET /api/webchat/online-users → Forwards to Backend GET /v1/webchat/online-users
    */
   async getOnlineUsers(): Promise<OnlineUser[]> {
     try {
-      const response = await fetch(`${this.baseUrl}/api/chat/online-users?tenantId=${this.tenantId}`, {
+      const response = await fetch(`${this.baseUrl}/api/webchat/online-users?tenantId=${this.tenantId}`, {
         method: 'GET',
         headers: this.getHeaders(),
       });

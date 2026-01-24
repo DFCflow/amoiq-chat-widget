@@ -33,9 +33,9 @@ The chat widget is a **frontend-only** component. To work properly, it requires 
    - Backend: Generates JWT token, returns to Gateway
    - Response: `{ "token": "eyJ...", "expiresIn": 3600 }`
 
-2. **`GET /api/chat/online-users`** - Route to Backend (Backend queries Redis)
+2. **`GET /api/webchat/online-users`** - Route to Backend (Backend queries Redis)
    ```http
-   GET /api/chat/online-users?tenantId=xxx
+   GET /api/webchat/online-users?tenantId=xxx
    Authorization: Bearer <api-key>
    ```
    - Gateway: Verifies API key, routes to Backend
@@ -148,9 +148,9 @@ io.use((socket, next) => {
    - Backend generates JWT using `JWT_SECRET`
    - Returns: `{ "token": "eyJ...", "expiresIn": 3600 }`
 
-4. **`GET /api/chat/online-users`** - Get list of online users
+4. **`GET /api/webchat/online-users`** - Get list of online users
    ```http
-   GET /api/chat/online-users?tenantId=xxx
+   GET /api/webchat/online-users?tenantId=xxx
    Authorization: Bearer <jwt-token>
    ```
    - Queries Redis: `HGETALL online_users:{tenantId}`

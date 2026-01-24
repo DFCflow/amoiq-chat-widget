@@ -42,7 +42,7 @@ Admin UI receives event via WebSocket → Updates UI in real-time
 ### 2. Admin Requests List (HTTP API)
 
 ```
-Admin UI → Gateway: GET /api/chat/online-users (with API key)
+Admin UI → Gateway: GET /api/webchat/online-users (with API key)
   ↓
 Gateway verifies API key → Routes to Backend API Server
   ↓
@@ -55,9 +55,9 @@ Returns list → Gateway → Admin UI
 
 ### Gateway Endpoints
 
-1. **`GET /api/chat/online-users`** - Route to Backend
+1. **`GET /api/webchat/online-users`** - Route to Backend
    ```http
-   GET /api/chat/online-users?tenantId=xxx
+   GET /api/webchat/online-users?tenantId=xxx
    Authorization: Bearer <api-key>
    ```
    - Gateway: Verifies API key, routes to Backend
@@ -90,7 +90,7 @@ Returns list → Gateway → Admin UI
 
 ### Backend API Server
 
-**Endpoint: `GET /api/chat/online-users`**
+**Endpoint: `GET /api/webchat/online-users`**
 - Queries Redis: `HGETALL online_users:{tenantId}`
 - Returns formatted list of online users
 
@@ -247,7 +247,7 @@ function PollingOnlineUsers({ tenantId }: { tenantId: string }) {
 
 ### HTTP Endpoint
 
-**`GET /api/chat/online-users`**
+**`GET /api/webchat/online-users`**
 
 **Query Parameters:**
 - `tenantId` (required): Tenant ID to query

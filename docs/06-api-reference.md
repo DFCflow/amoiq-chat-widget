@@ -166,13 +166,13 @@ Content-Type: application/json
 
 ### Online Users Endpoints
 
-#### `GET /api/chat/online-users`
+#### `GET /api/webchat/online-users`
 
 Get list of online users for a tenant.
 
 **Request:**
 ```http
-GET /api/chat/online-users?tenantId=xxx
+GET /api/webchat/online-users?tenantId=xxx
 Authorization: Bearer <jwt-token>
 X-Tenant-ID: tenant-123
 ```
