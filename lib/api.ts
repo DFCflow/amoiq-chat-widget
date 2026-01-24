@@ -61,7 +61,37 @@ export class ChatAPI {
   constructor(tenantId: string, websiteInfo?: WebsiteInfo, userId?: string, userInfo?: UserInfo) {
     this.tenantId = tenantId;
     this.baseUrl = API_BASE_URL;
-    this.websiteInfo = websiteInfo || this.getWebsiteInfo();
+    // Use provided websiteInfo if it has domain/origin, otherwise try to get from URL params
+    // Don't use fallback getWebsiteInfo() if we're on webchat domain (would return wrong domain)
+    if (websiteInfo && (websiteInfo.domain || websiteInfo.origin)) {
+      this.websiteInfo = websiteInfo;
+    } else {
+      // Try to get from URL params (widget loader should pass these)
+      const params = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null;
+      const domain = params?.get('domain');
+      const origin = params?.get('origin');
+      
+      if (domain || origin) {
+        this.websiteInfo = {
+          domain: domain || undefined,
+          origin: origin || undefined,
+          url: params?.get('url') || undefined,
+          referrer: params?.get('referrer') || undefined,
+          siteId: params?.get('siteId') || undefined,
+        };
+        console.log('[ChatAPI] Using website info from URL params:', this.websiteInfo);
+      } else {
+        // Last resort: use provided websiteInfo even if empty, or getWebsiteInfo() if not on webchat domain
+        const fallback = this.getWebsiteInfo();
+        if (fallback.domain && !fallback.domain.includes('webchat')) {
+          this.websiteInfo = fallback;
+        } else {
+          // On webchat domain without URL params - this shouldn't happen in production
+          this.websiteInfo = websiteInfo || {};
+          console.warn('[ChatAPI] ⚠️ No domain info available. Widget loader should pass domain via URL params.');
+        }
+      }
+    }
     this.userId = userId;
     this.userInfo = userInfo;
   }

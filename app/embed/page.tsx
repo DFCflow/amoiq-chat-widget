@@ -31,7 +31,7 @@ export default function EmbedPage() {
 
   /**
    * Get website info from parent window or detect from current context
-   * Priority: URL params (from widget loader) > parent window > current window (but never use webchat.amoiq.com)
+   * Priority: URL params (from widget loader) > document.referrer > parent window > current window (but never use webchat.amoiq.com)
    */
   const getWebsiteInfo = (): { domain?: string; origin?: string; url?: string; referrer?: string; siteId?: string } => {
     // Get from URL params FIRST (passed from widget loader - most reliable for cross-origin iframes)
@@ -55,7 +55,31 @@ export default function EmbedPage() {
       return websiteInfo;
     }
 
-    // Try to get from parent window (if same-origin iframe)
+    // Fallback 1: Try to extract domain from document.referrer (parent page that loaded the iframe)
+    if (typeof document !== 'undefined' && document.referrer) {
+      try {
+        const referrerUrl = new URL(document.referrer);
+        const referrerHostname = referrerUrl.hostname;
+        const referrerOrigin = referrerUrl.origin;
+        
+        // Don't use if it's the widget domain itself
+        if (referrerHostname !== 'webchat.amoiq.com' && !referrerHostname.includes('webchat')) {
+          const websiteInfo = {
+            domain: referrerHostname,
+            origin: referrerOrigin,
+            url: document.referrer,
+            referrer: document.referrer,
+            siteId: siteId || undefined,
+          };
+          console.log('[Widget] Using website info from document.referrer:', websiteInfo);
+          return websiteInfo;
+        }
+      } catch (e) {
+        console.log('[Widget] Could not parse document.referrer:', e);
+      }
+    }
+
+    // Fallback 2: Try to get from parent window (if same-origin iframe)
     if (window.parent && window.parent !== window) {
       try {
         const parentOrigin = window.parent.location.origin;
@@ -67,6 +91,7 @@ export default function EmbedPage() {
             origin: parentOrigin,
             url: window.parent.location.href,
             referrer: document.referrer || '',
+            siteId: siteId || undefined,
           };
           console.log('[Widget] Using website info from parent window:', websiteInfo);
           return websiteInfo;
@@ -77,14 +102,15 @@ export default function EmbedPage() {
       }
     }
 
-    // Fallback: detect from current window (for direct access/testing)
+    // Fallback 3: detect from current window (for direct access/testing)
     // BUT: Never use webchat.amoiq.com - this means URL params weren't passed
     if (typeof window !== 'undefined') {
       const currentHostname = window.location.hostname;
       // If we're on webchat.amoiq.com and no URL params, something is wrong
       if (currentHostname === 'webchat.amoiq.com' || currentHostname.includes('webchat')) {
-        console.warn('[Widget] ⚠️ Widget is on webchat domain but no URL params found. Widget loader should pass domain/origin via URL params.');
-        // Return empty - Gateway will handle missing domain
+        console.error('[Widget] ❌ ERROR: Widget is on webchat domain but no URL params found. Widget loader should pass domain/origin via URL params.');
+        console.error('[Widget] This means the widget is being accessed directly or widget loader is not working correctly.');
+        // Still return empty - Gateway will handle missing domain
         return {};
       }
       
@@ -93,12 +119,13 @@ export default function EmbedPage() {
         origin: window.location.origin,
         url: window.location.href,
         referrer: document.referrer || '',
+        siteId: siteId || undefined,
       };
       console.log('[Widget] Using website info from current window (fallback):', websiteInfo);
       return websiteInfo;
     }
 
-    console.warn('[Widget] ⚠️ Could not determine website info');
+    console.error('[Widget] ❌ Could not determine website info - no domain available');
     return {};
   };
 
@@ -157,8 +184,12 @@ export default function EmbedPage() {
     
     // Get website info
     const websiteInfo = getWebsiteInfo();
+    const urlParams = new URLSearchParams(window.location.search);
     console.log('[Widget] Website info:', websiteInfo);
-    console.log('[Widget] URL params:', new URLSearchParams(window.location.search).toString());
+    console.log('[Widget] URL params:', urlParams.toString());
+    console.log('[Widget] URL param domain:', urlParams.get('domain'));
+    console.log('[Widget] URL param origin:', urlParams.get('origin'));
+    console.log('[Widget] Current window hostname:', typeof window !== 'undefined' ? window.location.hostname : 'N/A');
     
     // Validate that we have proper domain info (not webchat.amoiq.com)
     if (websiteInfo.domain === 'webchat.amoiq.com' || websiteInfo.origin?.includes('webchat.amoiq.com')) {
@@ -166,6 +197,16 @@ export default function EmbedPage() {
       console.error('[Widget] This means URL params were not passed correctly by widget loader.');
       console.error('[Widget] Expected: domain from parent website (e.g., amoiq.com)');
       console.error('[Widget] Got:', websiteInfo);
+      console.error('[Widget] URL params check:', {
+        hasDomain: !!urlParams.get('domain'),
+        hasOrigin: !!urlParams.get('origin'),
+        domain: urlParams.get('domain'),
+        origin: urlParams.get('origin'),
+      });
+    } else if (websiteInfo.domain || websiteInfo.origin) {
+      console.log('[Widget] ✅ Valid domain detected:', websiteInfo.domain || websiteInfo.origin);
+    } else {
+      console.warn('[Widget] ⚠️ No domain info available - Gateway may not be able to identify tenant');
     }
     
     // Get user info (for logged-in users)
