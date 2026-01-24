@@ -18,7 +18,7 @@ graph TB
         WSProxy[WebSocket Proxy]
     end
 
-    subgraph "Backend Services"
+    subgraph "Backend Services" 
         APIServer[Backend API Server<br/>JWT Generation]
         WSServer[Backend WebSocket Server<br/>Real-time]
         Redis[(Redis<br/>Sessions & Presence)]

@@ -130,15 +130,24 @@ export class ChatWebSocketNative {
       const apiKey = process.env.NEXT_PUBLIC_GATEWAY_API_KEY || process.env.NEXT_PUBLIC_API_KEY;
       const headers: HeadersInit = {
         'Content-Type': 'application/json',
-        // DO NOT send X-Tenant-ID header - Gateway will set it based on domain lookup
-        // Gateway extracts domain from Origin/Referer header (sent automatically by browser),
-        // validates API key, queries webchat_integration table for domain → gets tenant_id,
-        // then sets X-Tenant-ID header before forwarding to backend
       };
 
       if (apiKey) {
         headers['Authorization'] = `Bearer ${apiKey}`;
       }
+
+      // Send parent domain in custom headers for Gateway to use
+      // Since widget runs in iframe (webchat.amoiq.com), Origin header will be from iframe domain
+      // We need to send the actual parent website domain so Gateway can look it up
+      if (this.websiteInfo?.origin) {
+        headers['X-Website-Origin'] = this.websiteInfo.origin;
+      }
+      if (this.websiteInfo?.domain) {
+        headers['X-Website-Domain'] = this.websiteInfo.domain;
+      }
+
+      // DO NOT send X-Tenant-ID header - Gateway will set it based on domain lookup
+      // Gateway should check X-Website-Origin first, then fallback to Origin/Referer
 
       const response = await fetch(`${this.gatewayUrl}/webchat/init`, {
         method: 'POST',

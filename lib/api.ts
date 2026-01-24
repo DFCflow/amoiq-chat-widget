@@ -99,8 +99,8 @@ export class ChatAPI {
 
   /**
    * Get API headers with tenant authentication
-   * Note: Gateway extracts domain from Origin/Referer header and sets X-Tenant-ID itself
-   * We only send Authorization header with API key
+   * Note: Gateway extracts domain from X-Website-Origin header (or Origin/Referer fallback) and sets X-Tenant-ID itself
+   * We send Authorization header with API key and custom headers with parent domain info
    */
   private getHeaders(): HeadersInit {
     const headers: HeadersInit = {
@@ -108,7 +108,7 @@ export class ChatAPI {
     };
 
     // Add API key if available (from env or config)
-    // Gateway validates API key, extracts domain from Origin/Referer header,
+    // Gateway validates API key, extracts domain from X-Website-Origin header (or Origin/Referer fallback),
     // queries webchat_integration table for domain → gets tenant_id,
     // then sets X-Tenant-ID header before forwarding to backend
     const apiKey = process.env.NEXT_PUBLIC_GATEWAY_API_KEY || process.env.NEXT_PUBLIC_API_KEY;
@@ -116,8 +116,18 @@ export class ChatAPI {
       headers['Authorization'] = `Bearer ${apiKey}`;
     }
 
+    // Send parent domain in custom headers for Gateway to use
+    // Since widget runs in iframe (webchat.amoiq.com), Origin header will be from iframe domain
+    // We need to send the actual parent website domain so Gateway can look it up
+    if (this.websiteInfo?.origin) {
+      headers['X-Website-Origin'] = this.websiteInfo.origin;
+    }
+    if (this.websiteInfo?.domain) {
+      headers['X-Website-Domain'] = this.websiteInfo.domain;
+    }
+
     // DO NOT send X-Tenant-ID header - Gateway will set it based on domain lookup
-    // Browser automatically sends Origin/Referer headers which Gateway uses
+    // Browser automatically sends Origin/Referer headers (from iframe domain), but Gateway should use X-Website-Origin first
 
     return headers;
   }
