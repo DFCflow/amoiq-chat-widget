@@ -36,9 +36,10 @@ NEXT_PUBLIC_GATEWAY_API_KEY=your-jwt-token-optional
 
 **Important:**
 - **`NEXT_PUBLIC_GATEWAY_URL`** (Required): Gateway URL - all connections (HTTP and WebSocket) go through gateway
-- **`NEXT_PUBLIC_GATEWAY_API_KEY`** (Optional): JWT token for authenticated users
-  - For anonymous users: token is obtained from gateway endpoint `POST /api/chat/anonymous-token`
-  - For admin users: token is obtained from your authentication system
+- **`NEXT_PUBLIC_GATEWAY_API_KEY`** (Required): API key for Gateway authentication (Bearer token)
+  - Used for initializing conversations via `POST /webchat/init`
+  - Gateway verifies API key, then generates JWT tokens for WebSocket connections
+  - JWT tokens are obtained automatically from `/webchat/init` endpoint
 - **Deprecated variables:**
   - `NEXT_PUBLIC_API_URL` - Use `NEXT_PUBLIC_GATEWAY_URL` instead
   - `NEXT_PUBLIC_WS_URL` - Use `NEXT_PUBLIC_GATEWAY_URL` instead (gateway handles WebSocket)
@@ -64,7 +65,7 @@ The `vercel.json` file configures caching headers automatically.
 - ✅ **Browser fingerprinting** - Identifies same user across devices
 - ✅ **Anonymous & logged-in users** - Single endpoint handles both user types
 - ✅ **Conversation history** - Automatically loads previous conversations
-- ✅ **Real-time messaging** - WebSocket with HTTP API fallback
+- ✅ **Real-time messaging** - Native WebSocket with JWT authentication (Gateway plan)
 - ✅ **Retry logic** - Automatic retries with exponential backoff
 - ✅ **Error handling** - Graceful degradation and user feedback
 
@@ -89,6 +90,13 @@ The `vercel.json` file configures caching headers automatically.
   - Browser fingerprinting for user identification
   - Session expiration (24 hours)
   - Cross-tab session sharing
+
+- **lib/ws-native.ts**: Native WebSocket client (Gateway plan)
+  - Implements JWT token authentication
+  - Calls `/webchat/init` to initialize conversation and get JWT token
+  - Connects to Gateway WebSocket endpoint with JWT token
+  - Uses Redis pub/sub for real-time message delivery
+  - Replaces Socket.io with native WebSocket
 
 ## Project Structure
 

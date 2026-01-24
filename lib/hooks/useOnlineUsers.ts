@@ -4,7 +4,7 @@
  */
 
 import { useEffect, useState, useRef, useCallback } from 'react';
-import { ChatWebSocket, OnlineUser } from '@/lib/ws';
+import { ChatWebSocketNative, OnlineUser } from '@/lib/ws-native';
 import { ChatAPI } from '@/lib/api';
 
 export interface UseOnlineUsersOptions {
@@ -82,7 +82,7 @@ export function useOnlineUsers(
   const [error, setError] = useState<Error | null>(null);
   const [isConnected, setIsConnected] = useState(false);
 
-  const wsRef = useRef<ChatWebSocket | null>(null);
+  const wsRef = useRef<ChatWebSocketNative | null>(null);
   const apiRef = useRef<ChatAPI | null>(null);
   const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -117,50 +117,73 @@ export function useOnlineUsers(
     // Initialize API client
     apiRef.current = new ChatAPI(tenantId);
 
-    // Initialize WebSocket connection as admin
-    wsRef.current = new ChatWebSocket(tenantId, {
-      onConnect: () => {
-        console.log('[useOnlineUsers] WebSocket connected');
-        setIsConnected(true);
-        // Request initial list on connect
-        wsRef.current?.requestOnlineUsers();
-      },
-      onDisconnect: () => {
-        console.log('[useOnlineUsers] WebSocket disconnected');
+    // Initialize WebSocket connection as admin (Gateway plan)
+    const initializeWebSocket = async () => {
+      try {
+        wsRef.current = new ChatWebSocketNative(tenantId, {
+          onConnect: () => {
+            console.log('[useOnlineUsers] WebSocket connected');
+            setIsConnected(true);
+            // Request initial list on connect
+            wsRef.current?.requestOnlineUsers();
+          },
+          onDisconnect: () => {
+            console.log('[useOnlineUsers] WebSocket disconnected');
+            setIsConnected(false);
+          },
+          onError: (err) => {
+            console.error('[useOnlineUsers] WebSocket error:', err);
+            setError(err);
+            setIsConnected(false);
+            // Fallback to polling if WebSocket fails
+            if (!pollingIntervalRef.current) {
+              pollingIntervalRef.current = setInterval(fetchOnlineUsers, pollingInterval);
+            }
+          },
+          onUserOnline: (user) => {
+            console.log('[useOnlineUsers] User came online:', user);
+            setOnlineUsers((prev) => {
+              // Check if user already exists
+              const exists = prev.find((u) => u.userId === user.userId);
+              if (exists) {
+                // Update existing user
+                return prev.map((u) => (u.userId === user.userId ? user : u));
+              }
+              // Add new user
+              return [...prev, user];
+            });
+          },
+          onUserOffline: (userId) => {
+            console.log('[useOnlineUsers] User went offline:', userId);
+            setOnlineUsers((prev) => prev.filter((u) => u.userId !== userId));
+          },
+          onOnlineUsersList: (users) => {
+            console.log('[useOnlineUsers] Received online users list:', users);
+            setOnlineUsers(users);
+            setIsLoading(false);
+          },
+        }, undefined, true); // true = isAdmin
+
+        // Initialize conversation and get JWT token
+        const initResult = await wsRef.current.initialize();
+        if (!initResult) {
+          throw new Error('Failed to initialize conversation');
+        }
+
+        // Connect WebSocket
+        wsRef.current.connect();
+      } catch (err) {
+        console.error('[useOnlineUsers] Failed to initialize WebSocket:', err);
+        setError(err instanceof Error ? err : new Error('WebSocket initialization failed'));
         setIsConnected(false);
-      },
-      onError: (err) => {
-        console.error('[useOnlineUsers] WebSocket error:', err);
-        setError(err);
-        setIsConnected(false);
-        // Fallback to polling if WebSocket fails
+        // Fallback to polling
         if (!pollingIntervalRef.current) {
           pollingIntervalRef.current = setInterval(fetchOnlineUsers, pollingInterval);
         }
-      },
-      onUserOnline: (user) => {
-        console.log('[useOnlineUsers] User came online:', user);
-        setOnlineUsers((prev) => {
-          // Check if user already exists
-          const exists = prev.find((u) => u.userId === user.userId);
-          if (exists) {
-            // Update existing user
-            return prev.map((u) => (u.userId === user.userId ? user : u));
-          }
-          // Add new user
-          return [...prev, user];
-        });
-      },
-      onUserOffline: (userId) => {
-        console.log('[useOnlineUsers] User went offline:', userId);
-        setOnlineUsers((prev) => prev.filter((u) => u.userId !== userId));
-      },
-      onOnlineUsersList: (users) => {
-        console.log('[useOnlineUsers] Received online users list:', users);
-        setOnlineUsers(users);
-        setIsLoading(false);
-      },
-    }, undefined, true); // true = isAdmin
+      }
+    };
+
+    initializeWebSocket();
 
     // Initial fetch
     if (autoRefresh) {

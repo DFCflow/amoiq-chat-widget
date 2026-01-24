@@ -142,17 +142,17 @@ interface UseOnlineUsersOptions {
 }
 ```
 
-### Direct WebSocket Integration
+### Direct WebSocket Integration (Native WebSocket)
 
 ```tsx
 import { useEffect, useState } from 'react';
-import { ChatWebSocket, OnlineUser } from '@/lib/ws';
+import { ChatWebSocketNative, OnlineUser } from '@/lib/ws-native';
 
 function CustomOnlineUsers({ tenantId }: { tenantId: string }) {
   const [onlineUsers, setOnlineUsers] = useState<OnlineUser[]>([]);
 
   useEffect(() => {
-    const websocket = new ChatWebSocket(
+    const websocket = new ChatWebSocketNative(
       tenantId,
       {
         onConnect: () => {
@@ -177,6 +177,15 @@ function CustomOnlineUsers({ tenantId }: { tenantId: string }) {
       undefined,
       true // isAdmin = true
     );
+
+    // Initialize conversation and connect
+    const init = async () => {
+      const result = await websocket.initialize();
+      if (result) {
+        websocket.connect();
+      }
+    };
+    init();
 
     return () => websocket.disconnect();
   }, [tenantId]);

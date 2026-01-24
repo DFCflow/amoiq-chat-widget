@@ -292,6 +292,57 @@ export class ChatAPI {
   }
 
   /**
+   * Initialize conversation and get JWT token for WebSocket connection
+   * This is the new flow per Gateway plan: POST /webchat/init
+   */
+  async initializeConversation(visitorId?: string): Promise<{
+    conversation_id: string;
+    visitor_id: string;
+    ws_token: string;
+    expires_in: number;
+  } | null> {
+    try {
+      const sessionInfo = getSessionInfo();
+      
+      // Prepare payload according to Gateway plan
+      const payload: any = {
+        tenantId: this.tenantId,
+        ...this.websiteInfo, // domain, origin, url, siteId
+      };
+
+      // Add visitorId if provided (for returning users)
+      if (visitorId) {
+        payload.visitorId = visitorId;
+      }
+
+      // Add user identification if logged in
+      if (this.userId) {
+        payload.userId = this.userId;
+        if (this.userInfo) {
+          payload.userInfo = this.userInfo;
+        }
+      }
+
+      const response = await fetch(`${this.baseUrl}/webchat/init`, {
+        method: 'POST',
+        headers: this.getHeaders(),
+        body: JSON.stringify(payload),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text().catch(() => response.statusText);
+        throw new Error(`Failed to initialize conversation: ${response.status} ${response.statusText} - ${errorText}`);
+      }
+
+      const data = await response.json();
+      return data;
+    } catch (error) {
+      console.error('[ChatAPI] Error initializing conversation:', error);
+      return null;
+    }
+  }
+
+  /**
    * Get list of online users for the tenant
    * Requires admin authentication
    */

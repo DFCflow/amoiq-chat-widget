@@ -3,7 +3,7 @@
 import { useEffect, useState, useRef } from 'react';
 import { getTenantId } from '@/lib/tenant';
 import { ChatAPI, UserInfo } from '@/lib/api';
-import { ChatWebSocket } from '@/lib/ws';
+import { ChatWebSocketNative } from '@/lib/ws-native';
 import { getSessionInfo, hasValidSession } from '@/lib/session';
 import styles from './styles.module.css';
 
@@ -26,7 +26,7 @@ export default function EmbedPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [wsError, setWsError] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const wsRef = useRef<ChatWebSocket | null>(null);
+  const wsRef = useRef<ChatWebSocketNative | null>(null);
   const apiRef = useRef<ChatAPI | null>(null);
 
   /**
@@ -152,67 +152,91 @@ export default function EmbedPage() {
     // Initialize API client with website info and user info
     apiRef.current = new ChatAPI(tid, websiteInfo, userId, userInfo);
     
-    // Initialize WebSocket with website info and user info
-    wsRef.current = new ChatWebSocket(tid, {
-      onMessage: (message) => {
-        setMessages((prev) => {
-          // If message has an ID, try to update existing message (for delivery status)
-          if (message.id) {
-            const existingIndex = prev.findIndex((m) => m.id === message.id);
-            if (existingIndex >= 0) {
-              // Update existing message (mark as delivered)
-              const updated = [...prev];
-              updated[existingIndex] = {
-                ...updated[existingIndex],
-                ...message,
-                deliveryStatus: 'delivered' as const,
-              };
-              return updated;
-            }
-          }
+    // Initialize WebSocket with new native WebSocket client (Gateway plan)
+    const initializeWebSocket = async () => {
+      try {
+        // Create WebSocket client
+        wsRef.current = new ChatWebSocketNative(tid, {
+          onMessage: (message) => {
+            setMessages((prev) => {
+              // If message has an ID, try to update existing message (for delivery status)
+              if (message.id) {
+                const existingIndex = prev.findIndex((m) => m.id === message.id);
+                if (existingIndex >= 0) {
+                  // Update existing message (mark as delivered)
+                  const updated = [...prev];
+                  updated[existingIndex] = {
+                    ...updated[existingIndex],
+                    ...message,
+                    deliveryStatus: 'delivered' as const,
+                  };
+                  return updated;
+                }
+              }
 
-          // Try to match by text content and sender (for user messages that need status update)
-          if (message.sender === 'user' && message.text) {
-            const pendingUserMessage = prev.find(
-              (m) => 
-                m.sender === 'user' && 
-                m.text === message.text && 
-                m.deliveryStatus === 'pending' &&
-                // Match messages within last 30 seconds
-                Math.abs(new Date(m.timestamp).getTime() - new Date(message.timestamp || Date.now()).getTime()) < 30000
-            );
-            
-            if (pendingUserMessage) {
-              // Update the pending message with the real ID and mark as delivered
-              return prev.map((m) => 
-                m.id === pendingUserMessage.id
-                  ? { ...message, deliveryStatus: 'delivered' as const }
-                  : m
-              );
-            }
-          }
+              // Try to match by text content and sender (for user messages that need status update)
+              if (message.sender === 'user' && message.text) {
+                const pendingUserMessage = prev.find(
+                  (m) => 
+                    m.sender === 'user' && 
+                    m.text === message.text && 
+                    m.deliveryStatus === 'pending' &&
+                    // Match messages within last 30 seconds
+                    Math.abs(new Date(m.timestamp).getTime() - new Date(message.timestamp || Date.now()).getTime()) < 30000
+                );
+                
+                if (pendingUserMessage) {
+                  // Update the pending message with the real ID and mark as delivered
+                  return prev.map((m) => 
+                    m.id === pendingUserMessage.id
+                      ? { ...message, deliveryStatus: 'delivered' as const }
+                      : m
+                  );
+                }
+              }
 
-          // New message from server (agent/bot response or unmatched user message)
-          return [...prev, { ...message, deliveryStatus: 'delivered' as const }];
-        });
-      },
-      onConnect: () => {
-        console.log('[Widget] WebSocket connected successfully');
-        setIsConnected(true);
+              // New message from server (agent/bot response or unmatched user message)
+              return [...prev, { ...message, deliveryStatus: 'delivered' as const }];
+            });
+          },
+          onConnect: () => {
+            console.log('[Widget] WebSocket connected successfully');
+            setIsConnected(true);
+            setIsLoading(false);
+            setWsError(null);
+          },
+          onDisconnect: () => {
+            setIsConnected(false);
+          },
+          onError: (error) => {
+            console.error('WebSocket error:', error);
+            setWsError(error.message || 'WebSocket connection failed');
+            setIsLoading(false);
+            // Allow input even if WebSocket fails - will use HTTP API fallback
+            setIsConnected(false);
+          },
+        }, websiteInfo, false, userId, userInfo);
+
+        // Step 1: Initialize conversation and get JWT token
+        console.log('[Widget] Initializing conversation...');
+        const initResult = await wsRef.current.initialize();
+        
+        if (!initResult) {
+          throw new Error('Failed to initialize conversation');
+        }
+
+        // Step 2: Connect WebSocket with JWT token
+        console.log('[Widget] Connecting WebSocket...');
+        wsRef.current.connect();
+      } catch (error) {
+        console.error('[Widget] Failed to initialize WebSocket:', error);
+        setWsError(error instanceof Error ? error.message : 'WebSocket initialization failed');
         setIsLoading(false);
-        setWsError(null);
-      },
-      onDisconnect: () => {
         setIsConnected(false);
-      },
-      onError: (error) => {
-        console.error('WebSocket error:', error);
-        setWsError(error.message || 'WebSocket connection failed');
-        setIsLoading(false);
-        // Allow input even if WebSocket fails - will use HTTP API fallback
-        setIsConnected(false);
-      },
-    }, websiteInfo, false, userId, userInfo);
+      }
+    };
+
+    initializeWebSocket();
 
     // Load conversation history on mount
     const loadConversationHistory = async () => {

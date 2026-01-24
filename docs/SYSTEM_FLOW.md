@@ -8,7 +8,7 @@ graph TB
         Widget[Chat Widget<br/>Frontend]
         Session[Session Manager<br/>localStorage]
         API[ChatAPI<br/>HTTP Client]
-        WS[ChatWebSocket<br/>Socket.io Client]
+        WS[ChatWebSocketNative<br/>Native WebSocket Client]
     end
 
     subgraph "Gateway"
@@ -29,7 +29,15 @@ graph TB
     Widget -->|1. Load| Session
     Session -->|2. Get/Create| SessionID[sessionId + fingerprint]
     Widget -->|3. Initialize| API
-    Widget -->|4. Initialize| WS
+    Widget -->|4. POST /webchat/init<br/>Authorization: Bearer api-key| Gateway
+    Gateway -->|5. Verify API Key| Auth
+    Auth -->|6. Valid| Router
+    Router -->|7. POST /conversations| APIServer
+    APIServer -->|8. Create/Find Conversation| DB
+    APIServer -->|9. Generate JWT Token| JWT[JWT with conversation_id]
+    APIServer -->|10. Return| Gateway
+    Gateway -->|11. {conversation_id, ws_token}| Widget
+    Widget -->|12. Connect WebSocket<br/>wss://gateway/ws?token=JWT| Gateway
 
     %% HTTP Message Flow
     Widget -->|5. Send Message| API
@@ -48,24 +56,26 @@ graph TB
     Gateway -->|16. Response| API
     API -->|17. Update UI| Widget
 
-    %% WebSocket Connection Flow
-    Widget -->|18. Connect| WS
-    WS -->|19. Connect with API Key<br/>auth: apiKey| Gateway
-    Gateway -->|20. Verify API Key| Auth
-    Auth -->|21. Valid| WSProxy
-    WSProxy -->|22. Proxy Connection| WSServer
-    WSServer -->|23. Verify JWT<br/>Track Connection| Redis
-    WSServer -->|24. Join Rooms| Rooms[tenant:tenantId<br/>conversation:sessionId<br/>admin:tenantId]
+    %% WebSocket Connection Flow (Native WebSocket with JWT)
+    Gateway -->|13. Validate JWT Token| JWTValidate[JWT Validation]
+    JWTValidate -->|14. Extract conversation_id| Gateway
+    Gateway -->|15. Subscribe Redis Pub/Sub<br/>ws_out:{conversation_id}| Redis
+    Gateway -->|16. WebSocket Connected| WS
+    WS -->|17. Ready| Widget
 
-    %% WebSocket Message Flow
-    Widget -->|25. Send via WS| WS
-    WS -->|26. Emit 'message'<br/>with sessionId + fingerprint| Gateway
-    Gateway -->|27. Proxy Event| WSServer
-    WSServer -->|28. Process Message| ProcessMsg[Generate messageId<br/>Get sessionId/userId]
-    WSServer -->|29. Push to Stream| Redis
-    WSServer -->|30. Broadcast| Broadcast[io.to conversation:sessionId<br/>emit 'meta_message_created']
-    Broadcast -->|31. Event| WS
-    WS -->|32. Update UI| Widget
+    %% WebSocket Message Flow (Native WebSocket)
+    Widget -->|18. Send via WS| WS
+    WS -->|19. Send JSON message<br/>{text, conversation_id, ...}| Gateway
+    Gateway -->|20. Validate JWT| JWTValidate
+    Gateway -->|21. Push to Redis Stream<br/>chat_incoming| Redis
+    Redis -->|22. Worker reads stream| Worker[Worker Service]
+    Worker -->|23. Process AI + Routing| Worker
+    Worker -->|24. POST /messages| APIServer
+    APIServer -->|25. Save Message| DB
+    APIServer -->|26. PUBLISH ws_out:{conversation_id}| Redis
+    Redis -->|27. Pub/Sub Message| Gateway
+    Gateway -->|28. Forward to WebSocket| WS
+    WS -->|29. Update UI| Widget
 
     %% Online Users Flow
     Widget -->|33. Admin Request| WS
@@ -217,7 +227,7 @@ graph TB
         Widget[Chat Widget<br/>React Component]
         Session[Session Manager<br/>lib/session.ts]
         API[API Client<br/>lib/api.ts]
-        WS[WebSocket Client<br/>lib/ws.ts]
+        WS[Native WebSocket Client<br/>lib/ws-native.ts]
     end
 
     subgraph "Gateway Layer"
