@@ -90,11 +90,19 @@ export class ChatWebSocketNative {
 
   /**
    * Auto-detect website information from browser
+   * Note: This should rarely be called since websiteInfo is passed from embed page
+   * This is only a fallback if websiteInfo wasn't provided
    */
   private getWebsiteInfo(): WebsiteInfo {
     if (typeof window !== 'undefined') {
+      const hostname = window.location.hostname;
+      // Don't use webchat.amoiq.com as domain - this means we're in iframe without proper info
+      if (hostname === 'webchat.amoiq.com' || hostname.includes('webchat')) {
+        console.warn('[WebSocket Native] ⚠️ Widget is on webchat domain but no websiteInfo provided. This should not happen in production.');
+        return {};
+      }
       return {
-        domain: window.location.hostname,
+        domain: hostname,
         origin: window.location.origin,
         url: window.location.href,
         referrer: document.referrer || '',
