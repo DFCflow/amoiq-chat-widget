@@ -30,10 +30,19 @@ The widget will be available at `http://localhost:3000`. Test the embed page at 
 Create a `.env.local` file:
 
 ```env
-NEXT_PUBLIC_API_URL=https://api.amoiq.com
-NEXT_PUBLIC_WS_URL=wss://api.amoiq.com
-NEXT_PUBLIC_API_KEY=your-api-key-optional
+NEXT_PUBLIC_GATEWAY_URL=https://api-gateway.amoiq.com
+NEXT_PUBLIC_GATEWAY_API_KEY=your-jwt-token-optional
 ```
+
+**Important:**
+- **`NEXT_PUBLIC_GATEWAY_URL`** (Required): Gateway URL - all connections (HTTP and WebSocket) go through gateway
+- **`NEXT_PUBLIC_GATEWAY_API_KEY`** (Optional): JWT token for authenticated users
+  - For anonymous users: token is obtained from gateway endpoint `POST /api/chat/anonymous-token`
+  - For admin users: token is obtained from your authentication system
+- **Deprecated variables:**
+  - `NEXT_PUBLIC_API_URL` - Use `NEXT_PUBLIC_GATEWAY_URL` instead
+  - `NEXT_PUBLIC_WS_URL` - Use `NEXT_PUBLIC_GATEWAY_URL` instead (gateway handles WebSocket)
+  - `NEXT_PUBLIC_WEBSOCKET_URL` - Use `NEXT_PUBLIC_GATEWAY_URL` instead
 
 ## Deployment
 

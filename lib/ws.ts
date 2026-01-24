@@ -49,16 +49,18 @@ export class ChatWebSocket {
     this.websiteInfo = websiteInfo || this.getWebsiteInfo();
     this.isAdmin = isAdmin;
     
-    // Determine WebSocket URL
-    const wsUrl = process.env.NEXT_PUBLIC_WEBSOCKET_URL || process.env.NEXT_PUBLIC_WS_URL;
+    // Always use Gateway URL for WebSocket connections
+    // Gateway handles authentication and proxies to WebSocket Server
+    // Note: NEXT_PUBLIC_WEBSOCKET_URL is deprecated - use NEXT_PUBLIC_GATEWAY_URL instead
+    const gatewayUrl = process.env.NEXT_PUBLIC_GATEWAY_URL || process.env.NEXT_PUBLIC_API_URL;
     
-    if (wsUrl) {
+    if (gatewayUrl) {
       // Socket.io works with http/https URLs, it handles the protocol
-      this.wsUrl = wsUrl.replace(/^wss?:/, 'https:').replace(/^ws:/, 'http:');
+      this.wsUrl = gatewayUrl.replace(/^wss?:/, 'https:').replace(/^ws:/, 'http:');
     } else {
-      // Default fallback - use gateway URL if available, otherwise default
-      const gatewayUrl = process.env.NEXT_PUBLIC_GATEWAY_URL || process.env.NEXT_PUBLIC_API_URL;
-      this.wsUrl = gatewayUrl ? gatewayUrl.replace(/^https?:/, 'https:') : 'https://api-gateway-dfcflow.fly.dev';
+      // Default fallback
+      this.wsUrl = 'https://api-gateway-dfcflow.fly.dev';
+      console.warn('[Socket.io] ⚠️ No gateway URL configured, using default');
     }
     
     this.connect();
@@ -83,8 +85,18 @@ export class ChatWebSocket {
     try {
       console.log('[Socket.io] Connecting to:', this.wsUrl, 'with tenantId:', this.tenantId);
       
-      // Get API key from environment for authentication
-      const apiKey = process.env.NEXT_PUBLIC_GATEWAY_API_KEY || process.env.NEXT_PUBLIC_API_KEY;
+      // Get JWT token from environment for authentication
+      // For anonymous users: token should be obtained from gateway endpoint POST /api/chat/anonymous-token
+      // For authenticated users: token should be obtained from login/auth endpoint
+      // Note: This should be a JWT token (already signed by gateway), NOT the JWT secret
+      // The JWT secret is only needed on the gateway to sign/verify tokens
+      // Token must contain: userId/user_id/sub (required) and optionally tenant_id, role
+      const jwtToken = process.env.NEXT_PUBLIC_GATEWAY_API_KEY || process.env.NEXT_PUBLIC_API_KEY;
+      
+      if (!jwtToken) {
+        console.warn('[Socket.io] ⚠️ No JWT token provided - connection will be rejected by gateway');
+        console.warn('[Socket.io] For anonymous users, get token from: POST /api/chat/anonymous-token');
+      }
       
       this.socket = io(this.wsUrl, {
         transports: ['websocket', 'polling'],
@@ -93,7 +105,7 @@ export class ChatWebSocket {
           ...(this.isAdmin && { role: 'admin' }),
         },
         auth: {
-          token: apiKey,
+          token: jwtToken, // JWT token required for authentication
           ...(this.isAdmin && { role: 'admin' }),
         },
         reconnection: true,

@@ -28,15 +28,22 @@ The chat widget is a **frontend-only** component. To work properly, it needs the
 - Broadcasts messages to agents/other users
 - Handles reconnection automatically
 
-### 3. **API Gateway** (Optional)
-**Purpose:** Route/organize API requests
+### 3. **API Gateway** (Required)
+**Purpose:** Authentication, routing, and security layer
 
 **What it does:**
-- Routes requests to correct services
+- **JWT Authentication**: Verifies JWT tokens for all connections
+- **Issue Anonymous Tokens**: Generates JWT tokens for anonymous chat users via `POST /api/chat/anonymous-token`
+- **Routes HTTP requests** to correct backend services
+- **Proxies WebSocket connections** to backend WebSocket server
 - Handles load balancing
 - Can add rate limiting, authentication layers
 
-**Note:** API Gateway is NOT required if you have a simple API server. It's just a routing layer.
+**Required Endpoints:**
+- `POST /api/chat/anonymous-token` - Generate JWT token for anonymous users
+- WebSocket proxy endpoint - All WebSocket connections go through gateway
+
+**Note:** The widget always connects to the Gateway, never directly to backend services. Gateway is the single entry point for all authentication.
 
 ## Current Status
 
@@ -60,10 +67,17 @@ You can test the widget UI without a backend by:
 
 ## Next Steps
 
-1. **Build your backend API** with the endpoints above
-2. **Set environment variables** in Vercel:
-   - `NEXT_PUBLIC_API_URL` = Your API URL
-   - `NEXT_PUBLIC_WS_URL` = Your WebSocket URL
-3. **Deploy backend** separately (not in this repo)
-4. **Test** - widget should connect and work
+1. **Build your Gateway** with:
+   - JWT authentication middleware
+   - `POST /api/chat/anonymous-token` endpoint
+   - WebSocket proxy/authentication
+   - HTTP request routing
+2. **Build your backend API** with the endpoints above
+3. **Build your backend WebSocket server** for real-time connections
+4. **Set environment variables** in Vercel:
+   - `NEXT_PUBLIC_GATEWAY_URL` = Your Gateway URL (required)
+   - `NEXT_PUBLIC_API_URL` = Your Gateway URL (same as gateway, deprecated)
+   - `NEXT_PUBLIC_WEBSOCKET_URL` = Deprecated, use `NEXT_PUBLIC_GATEWAY_URL` instead
+5. **Deploy backend services** separately (not in this repo)
+6. **Test** - widget should connect through gateway and work
 

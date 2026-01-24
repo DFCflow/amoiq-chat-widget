@@ -73,10 +73,11 @@ export class ChatAPI {
     // Add tenant ID to headers
     headers['X-Tenant-ID'] = this.tenantId;
 
-    // Add API key if available (from env or config)
-    const apiKey = process.env.NEXT_PUBLIC_GATEWAY_API_KEY || process.env.NEXT_PUBLIC_API_KEY;
-    if (apiKey) {
-      headers['Authorization'] = `Bearer ${apiKey}`;
+    // Add JWT token if available (from env or config)
+    // Note: This should be a JWT token (already signed), NOT the JWT secret
+    const jwtToken = process.env.NEXT_PUBLIC_GATEWAY_API_KEY || process.env.NEXT_PUBLIC_API_KEY;
+    if (jwtToken) {
+      headers['Authorization'] = `Bearer ${jwtToken}`;
     }
 
     return headers;
