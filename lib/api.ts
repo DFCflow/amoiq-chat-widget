@@ -120,7 +120,8 @@ export class ChatAPI {
       });
 
       if (!response.ok) {
-        throw new Error(`Failed to send message: ${response.statusText}`);
+        const errorText = await response.text().catch(() => response.statusText);
+        throw new Error(`Failed to send message: ${response.status} ${response.statusText} - ${errorText}`);
       }
 
       const data = await response.json();
@@ -130,9 +131,17 @@ export class ChatAPI {
       };
     } catch (error) {
       console.error('Error sending message:', error);
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      // Include more details for network errors
+      if (error instanceof TypeError && error.message.includes('fetch')) {
+        return {
+          success: false,
+          error: `Network error: ${errorMessage}. Check if the API endpoint is accessible.`,
+        };
+      }
       return {
         success: false,
-        error: error instanceof Error ? error.message : 'Unknown error',
+        error: errorMessage,
       };
     }
   }

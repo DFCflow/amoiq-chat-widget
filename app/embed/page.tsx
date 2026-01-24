@@ -137,6 +137,7 @@ export default function EmbedPage() {
         });
       },
       onConnect: () => {
+        console.log('[Widget] WebSocket connected successfully');
         setIsConnected(true);
         setIsLoading(false);
         setWsError(null);
@@ -193,11 +194,13 @@ export default function EmbedPage() {
     try {
       // Prefer WebSocket (pushes directly to Redis Stream)
       if (wsRef.current && wsRef.current.isConnected()) {
+        console.log('[Widget] Sending message via WebSocket');
         await wsRef.current.sendMessage(messageText);
         // Message will be updated when WebSocket receives meta_message_created event
       } else if (apiRef.current) {
         // Fallback to HTTP API if WebSocket is not connected
-        console.warn('WebSocket not connected, using HTTP API fallback');
+        console.warn('[Widget] WebSocket not connected, using HTTP API fallback');
+        console.log('[Widget] WebSocket status:', wsRef.current ? 'exists but not connected' : 'not initialized');
         const response = await apiRef.current.sendMessage(messageText);
         if (!response.success) {
           throw new Error(response.error || 'Failed to send message');
@@ -217,7 +220,8 @@ export default function EmbedPage() {
         throw new Error('No connection available');
       }
     } catch (error) {
-      console.error('Failed to send message:', error);
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      console.error('[Widget] Failed to send message:', errorMessage, error);
       // Update message status to failed
       setMessages((prev) => {
         return prev.map((m) => 
