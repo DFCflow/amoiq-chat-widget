@@ -130,7 +130,10 @@ export class ChatWebSocketNative {
       const apiKey = process.env.NEXT_PUBLIC_GATEWAY_API_KEY || process.env.NEXT_PUBLIC_API_KEY;
       const headers: HeadersInit = {
         'Content-Type': 'application/json',
-        'X-Tenant-ID': this.tenantId,
+        // DO NOT send X-Tenant-ID header - Gateway will set it based on domain lookup
+        // Gateway extracts domain from Origin/Referer header (sent automatically by browser),
+        // validates API key, queries webchat_integration table for domain → gets tenant_id,
+        // then sets X-Tenant-ID header before forwarding to backend
       };
 
       if (apiKey) {

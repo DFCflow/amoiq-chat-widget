@@ -99,23 +99,25 @@ export class ChatAPI {
 
   /**
    * Get API headers with tenant authentication
+   * Note: Gateway extracts domain from Origin/Referer header and sets X-Tenant-ID itself
+   * We only send Authorization header with API key
    */
   private getHeaders(): HeadersInit {
     const headers: HeadersInit = {
       'Content-Type': 'application/json',
     };
 
-    // Add tenant ID to headers
-    headers['X-Tenant-ID'] = this.tenantId;
-
     // Add API key if available (from env or config)
-    // This is the API key for Gateway authentication, NOT a JWT token
-    // Gateway verifies API key, then routes to Backend
-    // Backend generates JWT tokens internally (has JWT_SECRET)
+    // Gateway validates API key, extracts domain from Origin/Referer header,
+    // queries webchat_integration table for domain → gets tenant_id,
+    // then sets X-Tenant-ID header before forwarding to backend
     const apiKey = process.env.NEXT_PUBLIC_GATEWAY_API_KEY || process.env.NEXT_PUBLIC_API_KEY;
     if (apiKey) {
       headers['Authorization'] = `Bearer ${apiKey}`;
     }
+
+    // DO NOT send X-Tenant-ID header - Gateway will set it based on domain lookup
+    // Browser automatically sends Origin/Referer headers which Gateway uses
 
     return headers;
   }
