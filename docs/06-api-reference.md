@@ -6,9 +6,14 @@ Complete API reference for the Amoiq Chat Widget backend services.
 
 ## Base URL
 
-All API requests go through the Gateway:
+All API requests go through the Gateway. The default URL in the code is:
 ```
-https://api-gateway.amoiq.com
+https://api-gateway-dfcflow.fly.dev
+```
+
+Configure via environment variable:
+```env
+NEXT_PUBLIC_GATEWAY_URL=https://your-gateway-url.com
 ```
 
 ## Authentication
@@ -112,6 +117,34 @@ Authorization: Bearer <jwt-token>
 
 Generate JWT token for anonymous users.
 
+**Note:** This endpoint is recommended for anonymous users. The widget automatically includes sessionId and fingerprint in all messages, so this endpoint is optional if your backend handles anonymous sessions directly.
+
+#### `POST /api/chat/session` (Optional/Legacy)
+
+Initialize a new conversation session. This endpoint exists in the code but is not currently used by the widget. The widget automatically manages sessions using localStorage.
+
+**Request:**
+```http
+POST /api/chat/session
+Authorization: Bearer <api-key>
+Content-Type: application/json
+
+{
+  "tenantId": "tenant-123"
+}
+```
+
+**Response:**
+```json
+{
+  "sessionId": "session-789-abc123"
+}
+```
+
+#### `POST /api/chat/anonymous-token`
+
+Generate JWT token for anonymous users.
+
 **Request:**
 ```http
 POST /api/chat/anonymous-token
@@ -179,8 +212,11 @@ wss://api-gateway.amoiq.com
     role: 'admin'  // Optional: for admin connections
   },
   auth: {
-    token: '<api-key>',  // API key for Gateway authentication
-    role: 'admin'       // Optional: for admin connections
+    apiKey: '<api-key>',  // API key for Gateway authentication
+    role: 'admin'        // Optional: for admin connections
+  },
+  extraHeaders: {
+    'Authorization': 'Bearer <api-key>'  // API key in header for Gateway
   }
 }
 ```
@@ -222,6 +258,21 @@ wss://api-gateway.amoiq.com
 #### Server → Client
 
 **`meta_message_created`** - Message created notification
+```typescript
+{
+  message: {
+    id: string,
+    text: string,
+    sender: 'user' | 'bot' | 'agent',
+    timestamp: string,
+    sessionId: string,
+    userId: string,
+    tenantId: string
+  }
+}
+```
+
+**`ai_event_created`** - AI event notification (optional)
 ```typescript
 {
   message: {
