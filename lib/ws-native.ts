@@ -62,8 +62,8 @@ export class ChatWebSocketNative {
   private conversationId?: string;
   private visitorId?: string;
   private wsToken?: string;
-  private reconnectTimer?: NodeJS.Timeout;
-  private heartbeatInterval?: NodeJS.Timeout;
+  private reconnectTimer?: ReturnType<typeof setTimeout>;
+  private heartbeatInterval?: ReturnType<typeof setInterval>;
   private gatewayUrl: string;
 
   constructor(
@@ -173,6 +173,12 @@ export class ChatWebSocketNative {
    * Must call initialize() first
    */
   connect(): void {
+    // Ensure we're in the browser (not SSR)
+    if (typeof window === 'undefined') {
+      console.warn('[WebSocket Native] Cannot connect: WebSocket is only available in the browser');
+      return;
+    }
+
     if (!this.wsToken) {
       console.error('[WebSocket Native] Cannot connect: no JWT token. Call initialize() first.');
       this.callbacks.onError?.(new Error('No JWT token. Call initialize() first.'));
@@ -268,6 +274,10 @@ export class ChatWebSocketNative {
    * Message is pushed to Redis stream chat_incoming
    */
   async sendMessage(text: string): Promise<void> {
+    if (typeof window === 'undefined') {
+      throw new Error('WebSocket is only available in the browser');
+    }
+
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       throw new Error('WebSocket is not connected');
     }
@@ -308,6 +318,11 @@ export class ChatWebSocketNative {
    * Request list of online users (admin only)
    */
   requestOnlineUsers(): void {
+    if (typeof window === 'undefined') {
+      console.warn('[WebSocket Native] Cannot request online users: WebSocket is only available in the browser');
+      return;
+    }
+
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       console.warn('[WebSocket Native] Cannot request online users: not connected');
       return;
@@ -372,6 +387,9 @@ export class ChatWebSocketNative {
    * Check if WebSocket is connected
    */
   isConnected(): boolean {
+    if (typeof window === 'undefined') {
+      return false;
+    }
     return this.ws?.readyState === WebSocket.OPEN;
   }
 
