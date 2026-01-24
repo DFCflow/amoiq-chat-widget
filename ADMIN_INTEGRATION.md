@@ -30,51 +30,58 @@ Widget/Admin UI → Gateway (Authentication) → Backend Services
 ### Data Flow
 
 1. **Anonymous user connects:**
-   - Widget requests token: `POST /api/chat/anonymous-token` → Gateway
-   - Gateway generates JWT token → Returns to widget
-   - Widget connects WebSocket: `Gateway` → Gateway verifies JWT → Proxies to WebSocket Server
-   - WebSocket Server tracks connection in Redis
+   - Widget requests token: `POST /api/chat/anonymous-token` (with API key) → Gateway
+   - Gateway verifies API key → Routes to Backend API Server
+   - Backend API Server generates JWT token → Returns to Gateway → Returns to widget
+   - Widget connects WebSocket: `Gateway` (with API key) → Gateway verifies API key → Proxies to Backend WebSocket Server
+   - Backend WebSocket Server verifies JWT, tracks connection in Redis
 
 2. **Admin user connects:**
-   - Admin has JWT token from login
-   - Admin connects WebSocket: `Gateway` → Gateway verifies JWT → Proxies to WebSocket Server
-   - WebSocket Server tracks connection in Redis
+   - Admin has JWT token from login (obtained from Backend)
+   - Admin connects WebSocket: `Gateway` (with API key) → Gateway verifies API key → Proxies to Backend WebSocket Server
+   - Backend WebSocket Server verifies JWT, tracks connection in Redis
 
 3. **User comes online:**
-   - WebSocket Server stores in Redis: `online_users:{tenantId}`
-   - WebSocket Server emits `user_online` event → Broadcasts to admin rooms
+   - Backend WebSocket Server stores in Redis: `online_users:{tenantId}`
+   - Backend WebSocket Server emits `user_online` event → Broadcasts to admin rooms
    - Admin UI receives event via WebSocket → Updates UI in real-time
 
 4. **Admin requests list:**
-   - Admin UI → Gateway: `GET /api/chat/online-users` (with JWT token)
-   - Gateway verifies admin JWT → Routes to Backend API Server
+   - Admin UI → Gateway: `GET /api/chat/online-users` (with API key)
+   - Gateway verifies API key → Routes to Backend API Server
    - Backend API Server queries Redis → Returns list
    - Gateway → Admin UI: Returns response
 
 ## Backend Requirements
 
-### Gateway (Required - Authentication & Routing Layer)
+### Gateway (Required - API Key Authentication & Routing Layer)
 
 **IMPORTANT:** All connections (HTTP and WebSocket) must go through the Gateway. The widget always connects to the Gateway, never directly to backend services.
 
 **Responsibilities:**
-- **JWT Authentication**: Verify JWT tokens for all connections (HTTP and WebSocket)
-- **Issue Anonymous Tokens**: Generate JWT tokens for anonymous chat users
-- **Route HTTP requests**: `GET /api/chat/online-users` → Backend API Server
-- **Proxy WebSocket connections**: All WebSocket connections → Backend WebSocket Server
-- **Admin authorization**: Verify admin role for protected endpoints
+- **API Key Authentication**: Verify API key (Bearer token) for all connections
+- **Route HTTP requests**: Routes requests to Backend API Server
+- **Proxy WebSocket connections**: Proxies WebSocket connections to Backend WebSocket Server
 - **Rate limiting**: Optional protection against abuse
 - **Load balancing**: Optional distribution across backend instances
 
+**Note:** Gateway does NOT generate JWT tokens. Backend services handle JWT generation and WebSocket logic.
+
 **Required Endpoints:**
 
-1. **`POST /api/chat/anonymous-token`** - Issue JWT token for anonymous users
+1. **`POST /api/chat/anonymous-token`** - Route to Backend (Backend generates JWT)
    - **Request:**
-     ```json
+     ```http
+     POST /api/chat/anonymous-token
+     Authorization: Bearer <api-key>
+     Content-Type: application/json
+     
      {
        "tenantId": "tenant-123"
      }
      ```
+   - **Gateway:** Verifies API key, routes to Backend
+   - **Backend:** Generates JWT token, returns to Gateway
    - **Response:**
      ```json
      {
@@ -82,139 +89,111 @@ Widget/Admin UI → Gateway (Authentication) → Backend Services
        "expiresIn": 3600
      }
      ```
-   - **Implementation:**
-     ```javascript
-     // Gateway generates JWT for anonymous user
-     const token = jwt.sign({
-       userId: `anonymous-${generateId()}`,
-       tenantId: req.body.tenantId,
-       role: 'user',
-       anonymous: true
-     }, JWT_SECRET, { expiresIn: '1h' });
+
+2. **`GET /api/chat/online-users`** - Route to Backend (Backend queries Redis)
+   - **Request:**
+     ```http
+     GET /api/chat/online-users?tenantId=xxx
+     Authorization: Bearer <api-key>
      ```
+   - **Gateway:** Verifies API key, routes to Backend
+   - **Backend:** Queries Redis, returns list
 
-2. **WebSocket Proxy** - Proxy all WebSocket connections
-   - Gateway receives WebSocket connection with JWT token
-   - Gateway verifies JWT token using `JWT_SECRET`
+3. **WebSocket Proxy** - Proxy all WebSocket connections
+   - Gateway receives WebSocket connection with API key
+   - Gateway verifies API key
    - Gateway proxies connection to Backend WebSocket Server
-   - Gateway can either:
-     - Forward the connection to backend WebSocket server
-     - Handle the connection itself and communicate with backend
+   - Backend WebSocket Server handles JWT and Redis tracking
 
-**Gateway WebSocket Authentication Middleware:**
+**Gateway API Key Authentication Middleware:**
 
 ```javascript
-// Gateway WebSocket authentication
-io.use((socket, next) => {
-  const token = socket.handshake.auth.token;
-  const tenantId = socket.handshake.query.tenantId;
+// Gateway API key authentication (for HTTP requests)
+const API_KEY = process.env.GATEWAY_API_KEY;
+
+app.use('/api/chat', (req, res, next) => {
+  const apiKey = req.headers.authorization?.replace('Bearer ', '');
   
-  if (!token) {
-    // For anonymous users, token should be obtained from /api/chat/anonymous-token first
-    return next(new Error('JWT token required'));
+  if (!apiKey || apiKey !== API_KEY) {
+    return res.status(401).json({ error: 'Invalid API key' });
   }
   
-  try {
-    // Verify JWT token
-    const decoded = jwt.verify(token, JWT_SECRET);
-    
-    // Attach user info to socket
-    socket.userId = decoded.userId || decoded.user_id || decoded.sub;
-    socket.tenantId = decoded.tenantId || tenantId;
-    socket.isAdmin = decoded.role === 'admin';
-    socket.isAnonymous = decoded.anonymous === true;
-    
-    // Validate tenantId matches token (if provided in token)
-    if (decoded.tenantId && tenantId && decoded.tenantId !== tenantId) {
-      return next(new Error('Tenant ID mismatch'));
-    }
-    
-    next();
-  } catch (error) {
-    return next(new Error('Invalid JWT token'));
-  }
+  next();
 });
 
-// After authentication, proxy to backend or handle connection
-io.on('connection', (socket) => {
-  // Connection is authenticated, now proxy to backend WebSocket server
-  // OR handle the connection directly if gateway manages WebSocket
-});
-```
-
-**Gateway HTTP Authentication Middleware:**
-
-```javascript
-// Gateway HTTP authentication middleware
-app.use('/api/chat', async (req, res, next) => {
-  const token = req.headers.authorization?.replace('Bearer ', '');
-  
-  if (!token) {
-    return res.status(401).json({ error: 'JWT token required' });
-  }
-  
-  try {
-    const decoded = jwt.verify(token, JWT_SECRET);
-    req.user = {
-      userId: decoded.userId || decoded.user_id || decoded.sub,
-      tenantId: decoded.tenantId || req.headers['x-tenant-id'],
-      role: decoded.role,
-      isAdmin: decoded.role === 'admin'
-    };
-    next();
-  } catch (error) {
-    return res.status(401).json({ error: 'Invalid JWT token' });
-  }
-});
-
-// Admin-only endpoint
-app.get('/api/chat/online-users', async (req, res) => {
-  if (!req.user.isAdmin) {
-    return res.status(403).json({ error: 'Admin access required' });
-  }
-  
-  // Route to backend API server
-  const response = await fetch(`${BACKEND_API_URL}/api/chat/online-users?tenantId=${req.user.tenantId}`, {
+// Route to Backend (Backend generates JWT)
+app.post('/api/chat/anonymous-token', async (req, res) => {
+  const response = await fetch(`${BACKEND_API_URL}/api/chat/anonymous-token`, {
+    method: 'POST',
     headers: {
-      'X-Tenant-ID': req.user.tenantId,
-      'X-Admin-User-Id': req.user.userId
-    }
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(req.body)
   });
   
   const data = await response.json();
   res.json(data);
+});
+
+// Route to Backend (Backend queries Redis)
+app.get('/api/chat/online-users', async (req, res) => {
+  const response = await fetch(`${BACKEND_API_URL}/api/chat/online-users?${new URLSearchParams(req.query)}`);
+  const data = await response.json();
+  res.json(data);
+});
+```
+
+**Gateway WebSocket Proxy:**
+
+```javascript
+// Gateway WebSocket proxy (verifies API key, routes to Backend)
+io.use((socket, next) => {
+  const apiKey = socket.handshake.auth.apiKey || socket.handshake.headers.authorization?.replace('Bearer ', '');
+  
+  if (!apiKey || apiKey !== API_KEY) {
+    return next(new Error('Invalid API key'));
+  }
+  
+  next();
+});
+
+// Proxy to Backend WebSocket Server
+io.on('connection', (socket) => {
+  // Gateway just proxies - Backend handles JWT and Redis
+  // Implementation depends on your WebSocket proxy setup
 });
 ```
 
 **Environment Variables Required:**
 
 ```env
-JWT_SECRET=your-secret-key-here  # Used to sign/verify JWT tokens
+GATEWAY_API_KEY=your-api-key-here  # API key for gateway authentication
 BACKEND_API_URL=http://backend-api:3000  # Backend API server URL
-BACKEND_WS_URL=http://backend-ws:3001  # Backend WebSocket server URL (if proxying)
+BACKEND_WS_URL=http://backend-ws:3001  # Backend WebSocket server URL
 ```
 
 **Configuration needed:**
-- Set `JWT_SECRET` environment variable
-- Implement `POST /api/chat/anonymous-token` endpoint
-- Implement WebSocket authentication middleware
-- Route HTTP requests to backend API server
-- Proxy WebSocket connections to backend WebSocket server (or handle directly)
-- Admin authentication middleware/verification
+- Set `GATEWAY_API_KEY` environment variable
+- Implement API key authentication middleware
+- Route HTTP requests to Backend API server
+- Proxy WebSocket connections to Backend WebSocket server
+- Backend services handle JWT generation and Redis operations
 
 ### Backend WebSocket Server
 
 **Responsibilities:**
-- Track user connections/disconnections in real-time
-- Store online users state in Redis Hash (HSET) with key pattern `online_users:{tenantId}`
-- Handle incoming messages and push to Redis Streams for worker processing
-- Emit WebSocket events:
+- **JWT Generation**: Generate JWT tokens for anonymous users (has `JWT_SECRET`)
+- **JWT Verification**: Verify JWT tokens for WebSocket connections
+- **Track connections**: Track user connections/disconnections in real-time
+- **Redis Operations**: Store online users state in Redis Hash (HSET) with key pattern `online_users:{tenantId}`
+- **Handle messages**: Process incoming messages and push to Redis Streams for worker processing
+- **Emit events**:
   - `user_online` - when user connects (broadcast to admin rooms)
   - `user_offline` - when user disconnects (broadcast to admin rooms)
   - `meta_message_created` - when message is created (broadcast to conversation rooms)
   - `online_users_list` - response to `get_online_users` request
-- Join clients to appropriate rooms (tenant, conversation, admin)
-- Handle `get_online_users` event from admin clients
+- **Room management**: Join clients to appropriate rooms (tenant, conversation, admin)
+- **Admin requests**: Handle `get_online_users` event from admin clients
 
 **Implementation details:**
 - Track connections with: `userId`, `sessionId`, `tenantId`, `connectedAt`, `domain`, `origin`, `url`
@@ -381,10 +360,11 @@ socket.on('message', async (data) => {
 ### Backend API Server
 
 **Responsibilities:**
-- Implement HTTP endpoint: `GET /api/chat/online-users`
-- Query online users from storage (Redis, in-memory store, or database)
-- Return formatted list of online users
-- Support tenant-scoped queries via `X-Tenant-ID` header or query params
+- **JWT Generation**: Generate JWT tokens for anonymous users (has `JWT_SECRET`)
+- **HTTP Endpoints**: Implement endpoints like `GET /api/chat/online-users`
+- **Redis Queries**: Query online users from Redis (key pattern: `online_users:{tenantId}`)
+- **Return data**: Return formatted list of online users
+- **Tenant scoping**: Support tenant-scoped queries via `X-Tenant-ID` header or query params
 
 **Endpoint specification:**
 - **URL**: `GET /api/chat/online-users?tenantId=xxx`
@@ -720,17 +700,18 @@ NEXT_PUBLIC_GATEWAY_API_KEY=your-jwt-token-here
 **Important Notes:**
 - **`NEXT_PUBLIC_GATEWAY_URL`** (Required): Gateway URL for all connections (HTTP and WebSocket)
   - Widget always connects to Gateway, never directly to backend services
-  - Gateway handles authentication and proxies to backend services
-- **`NEXT_PUBLIC_GATEWAY_API_KEY`** (Required for authenticated users): JWT token for admin/authenticated users
-  - Should contain a **JWT token** (already signed by gateway), NOT the JWT secret
-  - For admin users: obtained from your authentication system (login/auth endpoint)
-  - For anonymous users: obtained from gateway endpoint `POST /api/chat/anonymous-token`
+  - Gateway handles API key authentication and routes to backend services
+- **`NEXT_PUBLIC_GATEWAY_API_KEY`** (Required): API key for Gateway authentication
+  - This is an API key (not a JWT token) used to authenticate with Gateway
+  - Gateway verifies this API key, then routes to Backend
+  - Backend services generate JWT tokens (Backend has `JWT_SECRET`)
 - **Deprecated:**
   - `NEXT_PUBLIC_WEBSOCKET_URL` - Deprecated, use `NEXT_PUBLIC_GATEWAY_URL` instead
   - `NEXT_PUBLIC_WS_URL` - Deprecated, use `NEXT_PUBLIC_GATEWAY_URL` instead
 - **JWT Secret:**
-  - `JWT_SECRET` is only needed on the **Gateway** (server-side) to sign/verify tokens
-  - The frontend does NOT need the JWT secret - only the signed token
+  - `JWT_SECRET` is only needed on the **Backend** (server-side) to sign/verify tokens
+  - Gateway does NOT need `JWT_SECRET` - it only uses API key authentication
+  - The frontend does NOT need the JWT secret - only the API key for Gateway
 
 ### Step 2: Install Dependencies
 
@@ -769,84 +750,94 @@ export default function AdminPage() {
 
 ## Authentication Requirements
 
-### JWT Authentication
+### API Key Authentication (Gateway)
 
-The WebSocket server uses **JWT authentication**. Connections without a valid JWT token are rejected.
+The Gateway uses **API key authentication** (Bearer token). All requests to Gateway must include a valid API key.
 
 #### Frontend Requirements (This Widget)
 
 **What you need:**
-- ✅ JWT token (already signed by backend)
-- ❌ JWT secret (NOT needed on frontend)
+- ✅ API key for Gateway authentication
+- ❌ JWT secret (NOT needed on frontend - Backend generates JWT)
 
-**How to provide the token:**
+**How to provide the API key:**
 
-The token can be provided via environment variable:
+The API key can be provided via environment variable:
 ```env
-NEXT_PUBLIC_GATEWAY_API_KEY=your-jwt-token-here
+NEXT_PUBLIC_GATEWAY_API_KEY=your-api-key-here
 ```
 
-The code automatically sends it in the `auth` object (recommended method):
+The code automatically sends it in headers:
 ```typescript
-// Automatically done by ChatWebSocket class
-io(WEBSOCKET_URL, {
-  auth: {
-    token: jwtToken, // From NEXT_PUBLIC_GATEWAY_API_KEY
-  }
-});
+// Automatically done by ChatAPI and ChatWebSocket classes
+headers: {
+  'Authorization': `Bearer ${apiKey}` // From NEXT_PUBLIC_GATEWAY_API_KEY
+}
 ```
 
-**JWT Token Requirements:**
-- Must be signed with the `JWT_SECRET` from your backend environment
-- Must contain at least one of: `userId`, `user_id`, or `sub` (for user identification)
-- Optionally include `tenant_id` and `role` (for admin access)
+**API Key Flow:**
+1. Widget sends API key to Gateway (in Authorization header)
+2. Gateway verifies API key
+3. Gateway routes request to Backend
+4. Backend generates JWT token (if needed) using `JWT_SECRET`
+5. Backend handles WebSocket connections and Redis operations
 
-**How to obtain the JWT token:**
-1. Authenticate with your backend (login endpoint)
-2. Backend signs a JWT token using `JWT_SECRET`
-3. Store the token in environment variable or get it dynamically
-4. Use the token to connect to WebSocket
+**For Anonymous Users:**
+1. Widget → Gateway (with API key): `POST /api/chat/anonymous-token`
+2. Gateway → Backend: Routes request
+3. Backend generates JWT token → Returns to Gateway → Returns to Widget
+4. Widget uses JWT token internally (Backend WebSocket Server verifies it)
 
 #### Backend Requirements
 
-**What you need:**
+**What Backend needs:**
 - ✅ `JWT_SECRET` environment variable (to sign/verify tokens)
 - ✅ JWT middleware to verify tokens on WebSocket connections
+- ✅ Generate JWT tokens for anonymous users via `POST /api/chat/anonymous-token`
+- ✅ Query Redis for online users list
 
 **Backend Configuration:**
 ```env
 JWT_SECRET=your-secret-key-here
+REDIS_URL=redis://localhost:6379
 ```
 
-The backend should:
-1. Sign JWT tokens when users authenticate
-2. Verify JWT tokens when WebSocket connections are established
-3. Reject connections without valid tokens
+**Backend API Server should:**
+1. Generate JWT tokens for anonymous users (has `JWT_SECRET`)
+2. Query Redis for online users list
+3. Return data to Gateway
+
+**Backend WebSocket Server should:**
+1. Verify JWT tokens when WebSocket connections are established
+2. Track connections in Redis (online_users:{tenantId})
+3. Emit events (user_online, user_offline, etc.)
+4. Reject connections without valid tokens
 
 ### Admin Authentication
 
 The system requires admin-level authentication:
 
-1. **WebSocket**: Pass admin role in connection:
+1. **WebSocket**: Admin connects with API key to Gateway, Gateway routes to Backend WebSocket Server
    ```typescript
    new ChatWebSocket(tenantId, callbacks, websiteInfo, true); // isAdmin = true
    ```
 
-2. **HTTP API**: Include admin token in headers:
+2. **HTTP API**: Include API key in headers (Gateway verifies, routes to Backend)
    ```typescript
    headers: {
-     'Authorization': 'Bearer <jwt-token>',
+     'Authorization': 'Bearer <api-key>', // API key for Gateway
      'X-Tenant-ID': tenantId
    }
    ```
 
 ### Token Management
 
-- JWT tokens should be obtained through your authentication system
-- Tokens should be scoped to specific tenants
-- Gateway should verify admin role before allowing access
-- **Frontend**: Only needs the signed JWT token (not the secret)
+- **Gateway**: Uses API key authentication (Bearer token)
+- **Backend**: Generates and verifies JWT tokens (has `JWT_SECRET`)
+- **Frontend**: Only needs API key for Gateway (not JWT secret)
 - **Backend**: Needs `JWT_SECRET` to sign and verify tokens
+- JWT tokens are generated by Backend and used internally
+- Gateway does NOT need `JWT_SECRET` - only API key verification
 
 ## Error Handling
 
@@ -968,14 +959,33 @@ const JWT_SECRET = process.env.JWT_SECRET;
 const BACKEND_API_URL = process.env.BACKEND_API_URL || 'http://backend-api:3000';
 const BACKEND_WS_URL = process.env.BACKEND_WS_URL || 'http://backend-ws:3001';
 
+// ============================================
+// Gateway Implementation (API Key Authentication)
+// ============================================
+
+const API_KEY = process.env.GATEWAY_API_KEY;
+const BACKEND_API_URL = process.env.BACKEND_API_URL || 'http://backend-api:3000';
+const BACKEND_WS_URL = process.env.BACKEND_WS_URL || 'http://backend-ws:3001';
+
 // Middleware
 app.use(express.json());
 
+// API Key Authentication Middleware
+app.use('/api/chat', (req, res, next) => {
+  const apiKey = req.headers.authorization?.replace('Bearer ', '');
+  
+  if (!apiKey || apiKey !== API_KEY) {
+    return res.status(401).json({ error: 'Invalid API key' });
+  }
+  
+  next();
+});
+
 // ============================================
-// HTTP Endpoints
+// HTTP Endpoints (Route to Backend)
 // ============================================
 
-// Issue anonymous JWT token
+// Route anonymous token request to Backend (Backend generates JWT)
 app.post('/api/chat/anonymous-token', async (req, res) => {
   const { tenantId } = req.body;
   
@@ -983,94 +993,56 @@ app.post('/api/chat/anonymous-token', async (req, res) => {
     return res.status(400).json({ error: 'tenantId is required' });
   }
   
-  // Generate anonymous user ID
-  const userId = `anonymous-${uuidv4()}`;
-  
-  // Create JWT token
-  const token = jwt.sign(
-    {
-      userId,
-      tenantId,
-      role: 'user',
-      anonymous: true
+  // Forward to Backend API (Backend generates JWT)
+  const response = await fetch(`${BACKEND_API_URL}/api/chat/anonymous-token`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
     },
-    JWT_SECRET,
-    { expiresIn: '24h' }
-  );
-  
-  res.json({
-    token,
-    expiresIn: 86400, // 24 hours
-    userId
+    body: JSON.stringify({ tenantId })
   });
+  
+  if (!response.ok) {
+    return res.status(response.status).json({ error: 'Backend API error' });
+  }
+  
+  const data = await response.json();
+  res.json(data);
 });
 
-// Get online users (admin only)
+// Route online users request to Backend (Backend queries Redis)
 app.get('/api/chat/online-users', async (req, res) => {
-  const token = req.headers.authorization?.replace('Bearer ', '');
+  const tenantId = req.query.tenantId;
   
-  if (!token) {
-    return res.status(401).json({ error: 'JWT token required' });
+  if (!tenantId) {
+    return res.status(400).json({ error: 'tenantId is required' });
   }
   
-  try {
-    const decoded = jwt.verify(token, JWT_SECRET);
-    
-    // Check admin role
-    if (decoded.role !== 'admin') {
-      return res.status(403).json({ error: 'Admin access required' });
-    }
-    
-    const tenantId = req.query.tenantId || decoded.tenantId;
-    
-    // Route to backend API
-    const response = await fetch(`${BACKEND_API_URL}/api/chat/online-users?tenantId=${tenantId}`, {
-      headers: {
-        'X-Tenant-ID': tenantId,
-        'X-Admin-User-Id': decoded.userId
-      }
-    });
-    
-    if (!response.ok) {
-      return res.status(response.status).json({ error: 'Backend API error' });
-    }
-    
-    const data = await response.json();
-    res.json(data);
-  } catch (error) {
-    res.status(401).json({ error: 'Invalid JWT token' });
+  // Forward to Backend API (Backend queries Redis)
+  const response = await fetch(`${BACKEND_API_URL}/api/chat/online-users?tenantId=${tenantId}`);
+  
+  if (!response.ok) {
+    return res.status(response.status).json({ error: 'Backend API error' });
   }
+  
+  const data = await response.json();
+  res.json(data);
 });
 
-// Proxy other chat API endpoints
+// Proxy other chat API endpoints to Backend
 app.use('/api/chat', async (req, res) => {
-  const token = req.headers.authorization?.replace('Bearer ', '');
+  const backendUrl = `${BACKEND_API_URL}${req.path}${req.url.includes('?') ? '&' : '?'}${new URLSearchParams(req.query)}`;
   
-  if (!token) {
-    return res.status(401).json({ error: 'JWT token required' });
-  }
+  const response = await fetch(backendUrl, {
+    method: req.method,
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: req.method !== 'GET' ? JSON.stringify(req.body) : undefined
+  });
   
-  try {
-    const decoded = jwt.verify(token, JWT_SECRET);
-    
-    // Forward request to backend API
-    const backendUrl = `${BACKEND_API_URL}${req.path}${req.url.includes('?') ? '&' : '?'}tenantId=${decoded.tenantId || req.query.tenantId}`;
-    
-    const response = await fetch(backendUrl, {
-      method: req.method,
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Tenant-ID': decoded.tenantId || req.query.tenantId,
-        'X-User-Id': decoded.userId
-      },
-      body: req.method !== 'GET' ? JSON.stringify(req.body) : undefined
-    });
-    
-    const data = await response.json();
-    res.status(response.status).json(data);
-  } catch (error) {
-    res.status(401).json({ error: 'Invalid JWT token' });
-  }
+  const data = await response.json();
+  res.status(response.status).json(data);
 });
 
 // ============================================
@@ -1110,52 +1082,35 @@ io.use((socket, next) => {
 });
 
 // ============================================
-// WebSocket Connection Handling
+// WebSocket Proxy (Route to Backend WebSocket Server)
 // ============================================
 
-io.on('connection', (socket) => {
-  console.log(`[Gateway] User connected: ${socket.userId}, tenant: ${socket.tenantId}, admin: ${socket.isAdmin}`);
+// WebSocket API key authentication
+io.use((socket, next) => {
+  const apiKey = socket.handshake.auth.apiKey || socket.handshake.headers.authorization?.replace('Bearer ', '');
   
-  // Here you can either:
-  // 1. Proxy to backend WebSocket server
-  // 2. Handle the connection directly in gateway
+  if (!apiKey || apiKey !== API_KEY) {
+    return next(new Error('Invalid API key'));
+  }
   
-  // Option 1: Proxy to backend WebSocket server
-  // (Implementation depends on your setup - could use socket.io-redis, etc.)
-  
-  // Option 2: Handle directly (if gateway manages WebSocket)
-  // You would implement the WebSocket server logic here
-  // See Backend WebSocket Server section for implementation details
-  
-  socket.on('disconnect', () => {
-    console.log(`[Gateway] User disconnected: ${socket.userId}`);
-  });
-  
-  // Forward events to backend or handle directly
-  socket.on('message', (data) => {
-    // Forward to backend WebSocket server or handle directly
-  });
-  
-  socket.on('get_online_users', (data) => {
-    // Only allow for admin
-    if (!socket.isAdmin) {
-      return socket.emit('error', { message: 'Admin access required' });
-    }
-    // Forward to backend or handle directly
-  });
+  next();
 });
 
-const PORT = process.env.PORT || 3000;
-httpServer.listen(PORT, () => {
-  console.log(`[Gateway] Server running on port ${PORT}`);
-  console.log(`[Gateway] JWT_SECRET configured: ${JWT_SECRET ? 'Yes' : 'No'}`);
+// Proxy WebSocket connections to Backend WebSocket Server
+// Backend WebSocket Server handles JWT and Redis operations
+io.on('connection', (socket) => {
+  console.log(`[Gateway] WebSocket connection received, proxying to backend`);
+  
+  // Proxy to Backend WebSocket Server
+  // Implementation depends on your WebSocket proxy setup
+  // Backend WebSocket Server will handle JWT verification and Redis tracking
 });
 ```
 
 ### Gateway Environment Variables
 
 ```env
-JWT_SECRET=your-secret-key-here
+GATEWAY_API_KEY=your-api-key-here
 BACKEND_API_URL=http://backend-api:3000
 BACKEND_WS_URL=http://backend-ws:3001
 PORT=3000
@@ -1163,16 +1118,15 @@ PORT=3000
 
 ### Gateway Checklist
 
-- [ ] Set `JWT_SECRET` environment variable
-- [ ] Implement `POST /api/chat/anonymous-token` endpoint
-- [ ] Implement WebSocket authentication middleware
-- [ ] Implement HTTP authentication middleware
-- [ ] Route HTTP requests to backend API server
-- [ ] Proxy WebSocket connections to backend WebSocket server (or handle directly)
-- [ ] Verify admin role for protected endpoints
-- [ ] Test anonymous token generation
-- [ ] Test authenticated connections
-- [ ] Test admin-only endpoints
+- [ ] Set `GATEWAY_API_KEY` environment variable
+- [ ] Implement API key authentication middleware (HTTP)
+- [ ] Implement API key authentication middleware (WebSocket)
+- [ ] Route `POST /api/chat/anonymous-token` to Backend (Backend generates JWT)
+- [ ] Route `GET /api/chat/online-users` to Backend (Backend queries Redis)
+- [ ] Proxy WebSocket connections to Backend WebSocket Server
+- [ ] Test API key authentication
+- [ ] Test routing to Backend services
+- [ ] Test WebSocket proxying
 
 ## Support
 

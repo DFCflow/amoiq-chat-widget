@@ -85,17 +85,14 @@ export class ChatWebSocket {
     try {
       console.log('[Socket.io] Connecting to:', this.wsUrl, 'with tenantId:', this.tenantId);
       
-      // Get JWT token from environment for authentication
-      // For anonymous users: token should be obtained from gateway endpoint POST /api/chat/anonymous-token
-      // For authenticated users: token should be obtained from login/auth endpoint
-      // Note: This should be a JWT token (already signed by gateway), NOT the JWT secret
-      // The JWT secret is only needed on the gateway to sign/verify tokens
-      // Token must contain: userId/user_id/sub (required) and optionally tenant_id, role
-      const jwtToken = process.env.NEXT_PUBLIC_GATEWAY_API_KEY || process.env.NEXT_PUBLIC_API_KEY;
+      // Get API key from environment for Gateway authentication
+      // Gateway verifies API key, then routes to Backend WebSocket Server
+      // Backend WebSocket Server handles JWT internally (not needed in widget)
+      const apiKey = process.env.NEXT_PUBLIC_GATEWAY_API_KEY || process.env.NEXT_PUBLIC_API_KEY;
       
-      if (!jwtToken) {
-        console.warn('[Socket.io] ⚠️ No JWT token provided - connection will be rejected by gateway');
-        console.warn('[Socket.io] For anonymous users, get token from: POST /api/chat/anonymous-token');
+      if (!apiKey) {
+        console.warn('[Socket.io] ⚠️ No API key provided - connection will be rejected by gateway');
+        console.warn('[Socket.io] Set NEXT_PUBLIC_GATEWAY_API_KEY with your Gateway API key');
       }
       
       this.socket = io(this.wsUrl, {
@@ -105,8 +102,11 @@ export class ChatWebSocket {
           ...(this.isAdmin && { role: 'admin' }),
         },
         auth: {
-          token: jwtToken, // JWT token required for authentication
+          apiKey: apiKey, // API key for Gateway authentication
           ...(this.isAdmin && { role: 'admin' }),
+        },
+        extraHeaders: {
+          'Authorization': `Bearer ${apiKey}`, // API key in header for Gateway
         },
         reconnection: true,
         reconnectionAttempts: this.maxReconnectAttempts,
