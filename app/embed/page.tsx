@@ -172,7 +172,7 @@ export default function EmbedPage() {
   }, [messages]);
 
   const handleSend = async () => {
-    if (!inputValue.trim() || !apiRef.current) return;
+    if (!inputValue.trim()) return;
 
     const messageText = inputValue.trim();
     setInputValue('');
@@ -191,24 +191,30 @@ export default function EmbedPage() {
     setMessages((prev) => [...prev, userMessage]);
 
     try {
-      // Always use HTTP POST to gateway (goes through Redis Stream → Worker)
-      const response = await apiRef.current.sendMessage(messageText);
-      if (!response.success) {
-        throw new Error(response.error || 'Failed to send message');
-      }
+      // Prefer WebSocket (pushes directly to Redis Stream)
+      if (wsRef.current && wsRef.current.isConnected()) {
+        await wsRef.current.sendMessage(messageText);
+        // Message will be updated when WebSocket receives meta_message_created event
+      } else if (apiRef.current) {
+        // Fallback to HTTP API if WebSocket is not connected
+        console.warn('WebSocket not connected, using HTTP API fallback');
+        const response = await apiRef.current.sendMessage(messageText);
+        if (!response.success) {
+          throw new Error(response.error || 'Failed to send message');
+        }
 
-      // If API returns a message with ID, update the temp message
-      if (response.message && response.message.id) {
-        setMessages((prev) => {
-          const filtered = prev.filter((m) => m.id !== tempId);
-          return [...filtered, {
-            ...response.message!,
-            deliveryStatus: 'pending' as const, // Still pending until WebSocket confirms
-          }];
-        });
+        // If API returns a message with ID, update the temp message
+        if (response.message && response.message.id) {
+          setMessages((prev) => {
+            const filtered = prev.filter((m) => m.id !== tempId);
+            return [...filtered, {
+              ...response.message!,
+              deliveryStatus: 'pending' as const, // Still pending until WebSocket confirms
+            }];
+          });
+        }
       } else {
-        // Keep temp message, will be updated when WebSocket receives confirmation
-        // Status remains 'pending' until meta_message_created event
+        throw new Error('No connection available');
       }
     } catch (error) {
       console.error('Failed to send message:', error);
