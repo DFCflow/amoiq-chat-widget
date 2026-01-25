@@ -210,7 +210,28 @@ export class ChatWebSocketNative {
       this.wsServerUrl = data.ws_server_url;
       // Extract tenant_id from response (Gateway should return it)
       const receivedTenantId = data.tenant_id;
-      this.tenantId = receivedTenantId || this.tenantId;
+      
+      // Validate tenant_id - reject placeholder values
+      const placeholderValues = ['your-tenant-id', 'tenant-id', 'your_tenant_id', 'tenant_id', ''];
+      if (receivedTenantId && !placeholderValues.includes(String(receivedTenantId).toLowerCase())) {
+        this.tenantId = receivedTenantId;
+      } else if (receivedTenantId) {
+        console.error('[Socket.IO] ERROR - Gateway returned placeholder tenant_id:', receivedTenantId);
+        console.error('[Socket.IO] Gateway should return actual tenant_id, not a placeholder');
+        // Keep existing tenantId if Gateway returned placeholder
+      } else {
+        // Gateway didn't return tenant_id, keep existing value
+        console.warn('[Socket.IO] WARNING - Gateway did not return tenant_id in response');
+      }
+      
+      // Log where tenantId came from
+      console.log('[Socket.IO] DEBUG - tenantId source:', {
+        from_gateway: receivedTenantId,
+        from_gateway_type: typeof receivedTenantId,
+        is_placeholder: receivedTenantId && placeholderValues.includes(String(receivedTenantId).toLowerCase()),
+        final_tenantId: this.tenantId,
+        final_tenantId_type: typeof this.tenantId,
+      });
 
       // Debug logging - show tenantId details
       console.log('[Socket.IO] Conversation initialized:', {
@@ -455,10 +476,19 @@ export class ChatWebSocketNative {
     const sessionInfo = getSessionInfo();
     refreshSession();
 
-    // tenantId is REQUIRED by the server - throw error if not available
-    if (!this.tenantId) {
-      const error = new Error('tenantId is required but not available. Make sure initialize() was called successfully and Gateway returned tenant_id.');
-      console.error('[Socket.IO] ERROR - Missing tenantId:', {
+    // tenantId is REQUIRED by the server - throw error if not available or if it's a placeholder
+    const placeholderValues = ['your-tenant-id', 'tenant-id', 'your_tenant_id', 'tenant_id', ''];
+    const isPlaceholder = this.tenantId && placeholderValues.includes(String(this.tenantId).toLowerCase());
+    
+    if (!this.tenantId || isPlaceholder) {
+      const error = new Error(
+        isPlaceholder 
+          ? `tenantId is a placeholder value ("${this.tenantId}"). Gateway must return actual tenant_id in /webchat/init response.`
+          : 'tenantId is required but not available. Make sure initialize() was called successfully and Gateway returned tenant_id.'
+      );
+      console.error('[Socket.IO] ERROR - Invalid tenantId:', {
+        tenantId: this.tenantId,
+        is_placeholder: isPlaceholder,
         conversation_id: this.conversationId,
         visitor_id: this.visitorId,
         has_ws_token: !!this.wsToken,
