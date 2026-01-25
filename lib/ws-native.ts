@@ -576,27 +576,33 @@ export class ChatWebSocketNative {
       }
     }
 
-    // Debug logging - show full message payload with tenantId details
-    console.log('[Socket.IO] DEBUG - Sending message payload:', {
+    // Debug logging - show complete message payload
+    console.log('[Socket.IO] DEBUG - Complete message payload being sent:', message);
+    console.log('[Socket.IO] DEBUG - Message payload details:', {
       type: message.type,
       text: message.text,
       tenantId: message.tenantId,
       tenantId_type: typeof message.tenantId,
-      tenantId_value: message.tenantId,
       tenant_id: message.tenant_id,
       tenant_id_type: typeof message.tenant_id,
-      tenant_id_value: message.tenant_id,
+      integration_id: message.integration_id,
+      integrationId: message.integrationId,
+      site_id: message.site_id,
+      siteId: message.siteId,
       conversation_id: message.conversation_id,
       visitor_id: message.visitor_id,
       sessionId: message.sessionId,
       fingerprint: message.fingerprint,
       timestamp: message.timestamp,
-      websiteInfo: this.websiteInfo,
-      userId: this.userId,
-      full_payload: message,  // Full payload for debugging
-      stored_tenantId: this.tenantId,
-      stored_tenantId_type: typeof this.tenantId,
+      domain: message.domain,
+      origin: message.origin,
+      url: message.url,
+      referrer: message.referrer,
+      siteId_from_websiteInfo: message.siteId,
+      userId: message.userId,
+      userInfo: message.userInfo,
     });
+    console.log('[Socket.IO] DEBUG - Full payload JSON:', JSON.stringify(message, null, 2));
 
     try {
       this.socket.emit('message', message);
