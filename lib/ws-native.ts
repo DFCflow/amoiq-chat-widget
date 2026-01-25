@@ -208,12 +208,19 @@ export class ChatWebSocketNative {
       this.wsToken = data.ws_token;
       this.wsServerUrl = data.ws_server_url;
 
+      // Debug logging
       console.log('[Socket.IO] Conversation initialized:', {
         conversation_id: this.conversationId,
         visitor_id: this.visitorId,
         ws_server_url: this.wsServerUrl,
         expires_in: data.expires_in,
       });
+      console.log('[Socket.IO] DEBUG - Token received:', {
+        token_length: this.wsToken?.length || 0,
+        token_preview: this.wsToken ? `${this.wsToken.substring(0, 20)}...${this.wsToken.substring(this.wsToken.length - 20)}` : 'null',
+        token_full: this.wsToken, // Full token for debugging (remove in production)
+      });
+      console.log('[Socket.IO] DEBUG - Server URL:', this.wsServerUrl);
 
       return data;
     } catch (error) {
@@ -255,9 +262,24 @@ export class ChatWebSocketNative {
       // Connect to Socket.IO server using ws_server_url with token in auth object
       console.log('[Socket.IO] Connecting to:', this.wsServerUrl.replace(/\/\/.*@/, '//***@')); // Hide credentials in log
       
+      // Debug logging - what we're sending
+      console.log('[Socket.IO] DEBUG - Connection config:', {
+        ws_server_url: this.wsServerUrl,
+        has_token: !!this.wsToken,
+        token_length: this.wsToken?.length || 0,
+        token_preview: this.wsToken ? `${this.wsToken.substring(0, 20)}...${this.wsToken.substring(this.wsToken.length - 20)}` : 'null',
+        auth_object: { token: this.wsToken ? '***' : undefined },
+      });
+      
       this.socket = io(this.wsServerUrl, {
         auth: {
           token: this.wsToken,
+        },
+        query: {
+          token: this.wsToken,  // Fallback: socket.handshake.query?.token
+        },
+        extraHeaders: {
+          'Authorization': `Bearer ${this.wsToken}`,  // Fallback: socket.handshake.headers?.authorization
         },
         transports: ['websocket', 'polling'], // Allow fallback to polling if websocket fails
         reconnection: true,
@@ -265,10 +287,17 @@ export class ChatWebSocketNative {
         reconnectionDelay: 1000,
         reconnectionDelayMax: 5000,
       });
+      
+      console.log('[Socket.IO] DEBUG - Socket.IO client created, waiting for connection...');
 
       // Connection established
       this.socket.on('connect', () => {
         console.log('[Socket.IO] ✅ Connected successfully');
+        console.log('[Socket.IO] DEBUG - Connection details:', {
+          id: this.socket?.id,
+          connected: this.socket?.connected,
+          transport: this.socket?.io?.engine?.transport?.name,
+        });
         this.reconnectAttempts = 0;
         this.callbacks.onConnect?.();
       });
@@ -300,6 +329,13 @@ export class ChatWebSocketNative {
       // Handle connection errors
       this.socket.on('connect_error', (error: Error) => {
         console.error('[Socket.IO] ❌ Connection error:', error);
+        console.error('[Socket.IO] DEBUG - Connection error details:', {
+          message: error.message,
+          name: error.name,
+          stack: error.stack,
+          socket_id: this.socket?.id,
+          socket_connected: this.socket?.connected,
+        });
         this.reconnectAttempts++;
         this.callbacks.onError?.(error);
       });
@@ -307,6 +343,11 @@ export class ChatWebSocketNative {
       // Handle disconnection
       this.socket.on('disconnect', (reason: string) => {
         console.log('[Socket.IO] Disconnected:', reason);
+        console.log('[Socket.IO] DEBUG - Disconnect details:', {
+          reason: reason,
+          socket_id: this.socket?.id,
+          reconnect_attempts: this.reconnectAttempts,
+        });
         this.callbacks.onDisconnect?.();
 
         // Attempt reconnection if needed (Socket.IO handles this automatically, but we can re-initialize if token expired)
