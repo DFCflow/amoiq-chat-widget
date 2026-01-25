@@ -222,8 +222,10 @@ export class ChatWebSocketNative {
       // Extract tenant_id from response (Gateway should return it)
       const receivedTenantId = data.tenant_id;
       
-      // Also try to extract tenant_id from JWT token payload (fallback)
+      // Also try to extract tenant_id, integration_id, site_id from JWT token payload (fallback)
       let tokenTenantId: string | null = null;
+      let tokenIntegrationId: string | null = null;
+      let tokenSiteId: string | null = null;
       if (this.wsToken) {
         try {
           const base64Url = this.wsToken.split('.')[1];
@@ -234,8 +236,12 @@ export class ChatWebSocketNative {
           const tokenPayload = JSON.parse(jsonPayload);
           // Check for tenant_id in token (could be tenant_id, tenantId, or tenant_id)
           tokenTenantId = tokenPayload.tenant_id || tokenPayload.tenantId || tokenPayload.tenant_id || null;
+          // Check for integration_id in token
+          tokenIntegrationId = tokenPayload.integration_id || tokenPayload.integrationId || null;
+          // Check for site_id in token
+          tokenSiteId = tokenPayload.site_id || tokenPayload.siteId || null;
         } catch (e) {
-          console.warn('[Socket.IO] DEBUG - Could not extract tenant_id from token:', e);
+          console.warn('[Socket.IO] DEBUG - Could not extract fields from token:', e);
         }
       }
       
