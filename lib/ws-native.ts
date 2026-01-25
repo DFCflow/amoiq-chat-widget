@@ -215,10 +215,26 @@ export class ChatWebSocketNative {
         ws_server_url: this.wsServerUrl,
         expires_in: data.expires_in,
       });
+      // Decode JWT token to see payload (without verification)
+      let tokenPayload: any = null;
+      if (this.wsToken) {
+        try {
+          const base64Url = this.wsToken.split('.')[1];
+          const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+          const jsonPayload = decodeURIComponent(atob(base64).split('').map((c) => {
+            return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);
+          }).join(''));
+          tokenPayload = JSON.parse(jsonPayload);
+        } catch (e) {
+          console.warn('[Socket.IO] DEBUG - Could not decode token:', e);
+        }
+      }
+      
       console.log('[Socket.IO] DEBUG - Token received:', {
         token_length: this.wsToken?.length || 0,
         token_preview: this.wsToken ? `${this.wsToken.substring(0, 20)}...${this.wsToken.substring(this.wsToken.length - 20)}` : 'null',
         token_full: this.wsToken, // Full token for debugging (remove in production)
+        token_payload: tokenPayload, // Decoded JWT payload
       });
       console.log('[Socket.IO] DEBUG - Server URL:', this.wsServerUrl);
 
@@ -262,13 +278,31 @@ export class ChatWebSocketNative {
       // Connect to Socket.IO server using ws_server_url with token in auth object
       console.log('[Socket.IO] Connecting to:', this.wsServerUrl.replace(/\/\/.*@/, '//***@')); // Hide credentials in log
       
+      // Decode JWT token to see payload (without verification)
+      let tokenPayload: any = null;
+      if (this.wsToken) {
+        try {
+          const base64Url = this.wsToken.split('.')[1];
+          const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+          const jsonPayload = decodeURIComponent(atob(base64).split('').map((c) => {
+            return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);
+          }).join(''));
+          tokenPayload = JSON.parse(jsonPayload);
+        } catch (e) {
+          console.warn('[Socket.IO] DEBUG - Could not decode token:', e);
+        }
+      }
+      
       // Debug logging - what we're sending
       console.log('[Socket.IO] DEBUG - Connection config:', {
         ws_server_url: this.wsServerUrl,
         has_token: !!this.wsToken,
         token_length: this.wsToken?.length || 0,
         token_preview: this.wsToken ? `${this.wsToken.substring(0, 20)}...${this.wsToken.substring(this.wsToken.length - 20)}` : 'null',
+        token_payload: tokenPayload, // Decoded JWT payload - check role, anonymous, user_id
         auth_object: { token: this.wsToken ? '***' : undefined },
+        query_param: { token: this.wsToken ? '***' : undefined },
+        authorization_header: this.wsToken ? 'Bearer ***' : undefined,
       });
       
       this.socket = io(this.wsServerUrl, {
