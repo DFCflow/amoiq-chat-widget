@@ -13,7 +13,7 @@ export const dynamic = 'force-dynamic';
 interface Message {
   id: string;
   text: string;
-  sender: 'user' | 'bot' | 'agent';
+  sender: 'user' | 'bot' | 'agent' | 'system';
   timestamp: string;
   deliveryStatus?: 'pending' | 'delivered' | 'failed';
 }
@@ -341,6 +341,12 @@ export default function EmbedPage() {
         throw new Error('Failed to initialize conversation');
       }
 
+      // Check if conversation was closed
+      if (initResult.closed_at) {
+        console.log('[Widget] Previous conversation was closed, notifying user');
+        addSystemMessage('The previous conversation has been closed. Starting a new conversation.');
+      }
+
       // Step 2: Connect WebSocket with JWT token
       console.log('[Widget] Connecting WebSocket...');
       wsRef.current.connect();
@@ -351,6 +357,17 @@ export default function EmbedPage() {
       setIsConnected(false);
       setIsInitialized(false); // Allow retry
     }
+  };
+
+  // Helper function to add system message
+  const addSystemMessage = (text: string) => {
+    const systemMessage: Message = {
+      id: `system-${Date.now()}`,
+      text,
+      sender: 'system',
+      timestamp: new Date().toISOString(),
+    };
+    setMessages((prev) => [...prev, systemMessage]);
   };
 
   // Load conversation history
@@ -424,7 +441,17 @@ export default function EmbedPage() {
         console.warn('[Widget] WebSocket not connected, using HTTP API fallback');
         console.log('[Widget] WebSocket status:', wsRef.current ? 'exists but not connected' : 'not initialized');
         const response = await apiRef.current.sendMessage(messageText);
+        
+        // Check if conversation was closed and retried
+        if (response.conversationClosed) {
+          addSystemMessage('The previous conversation has been closed. Starting a new conversation.');
+        }
+        
         if (!response.success) {
+          // Check if error is about closed conversation
+          if (response.error && (response.error.toLowerCase().includes('closed') || response.error.includes('410'))) {
+            addSystemMessage('The previous conversation has been closed. Starting a new conversation.');
+          }
           throw new Error(response.error || 'Failed to send message');
         }
 
@@ -501,31 +528,43 @@ export default function EmbedPage() {
             <p>Start a conversation</p>
           </div>
         ) : (
-          messages.map((message) => (
-            <div
-              key={message.id}
-              className={`${styles.message} ${
-                message.sender === 'user' ? styles.messageUser : styles.messageBot
-              }`}
-            >
-              <div className={styles.messageContent}>{message.text}</div>
-              <div className={styles.messageMeta}>
-                <div className={styles.messageTime}>
-                  {new Date(message.timestamp).toLocaleTimeString([], {
-                    hour: '2-digit',
-                    minute: '2-digit',
-                  })}
+          messages.map((message) => {
+            // System messages (e.g., conversation closed notifications)
+            if (message.sender === 'system') {
+              return (
+                <div key={message.id} className={styles.messageSystem}>
+                  <div className={styles.messageSystemContent}>{message.text}</div>
                 </div>
-                {message.sender === 'user' && message.deliveryStatus && (
-                  <div className={styles.messageStatus}>
-                    {message.deliveryStatus === 'pending' && '⏳'}
-                    {message.deliveryStatus === 'delivered' && '✓'}
-                    {message.deliveryStatus === 'failed' && '✗'}
+              );
+            }
+            
+            // Regular messages
+            return (
+              <div
+                key={message.id}
+                className={`${styles.message} ${
+                  message.sender === 'user' ? styles.messageUser : styles.messageBot
+                }`}
+              >
+                <div className={styles.messageContent}>{message.text}</div>
+                <div className={styles.messageMeta}>
+                  <div className={styles.messageTime}>
+                    {new Date(message.timestamp).toLocaleTimeString([], {
+                      hour: '2-digit',
+                      minute: '2-digit',
+                    })}
                   </div>
-                )}
+                  {message.sender === 'user' && message.deliveryStatus && (
+                    <div className={styles.messageStatus}>
+                      {message.deliveryStatus === 'pending' && '⏳'}
+                      {message.deliveryStatus === 'delivered' && '✓'}
+                      {message.deliveryStatus === 'failed' && '✗'}
+                    </div>
+                  )}
+                </div>
               </div>
-            </div>
-          ))
+            );
+          })
         )}
         <div ref={messagesEndRef} />
       </div>

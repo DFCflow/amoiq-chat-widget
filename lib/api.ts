@@ -4,7 +4,7 @@
  * Production-ready with session management and user identification
  */
 
-import { getSessionInfo, refreshSession, getConversationId } from './session';
+import { getSessionInfo, refreshSession, getConversationId, clearConversation } from './session';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_GATEWAY_URL || process.env.NEXT_PUBLIC_API_URL || 'https://api-gateway-dfcflow.fly.dev';
 
@@ -20,6 +20,7 @@ export interface SendMessageResponse {
   success: boolean;
   message?: Message;
   error?: string;
+  conversationClosed?: boolean; // Indicates if conversation was closed and retried
 }
 
 export interface WebsiteInfo {
@@ -272,6 +273,28 @@ export class ChatAPI {
           if (!response.ok) {
             const errorText = await response.text().catch(() => response.statusText);
             
+            // Check if error is about closed conversation
+            const isClosedConversation = errorText.toLowerCase().includes('closed') || 
+                                         errorText.toLowerCase().includes('conversation closed') ||
+                                         response.status === 410; // 410 Gone often used for closed resources
+            
+            if (isClosedConversation && conversationId) {
+              // Conversation is closed - clear stored conversation data
+              console.log('[ChatAPI] Conversation is closed, clearing stored conversation data');
+              clearConversation();
+              
+              // Retry without conversation_id to create a new conversation
+              if (attempt < maxRetries - 1) {
+                delete payload.conversation_id;
+                console.log('[ChatAPI] Retrying message without conversation_id to create new conversation');
+                const delay = Math.min(1000 * Math.pow(2, attempt), 5000);
+                await new Promise(resolve => setTimeout(resolve, delay));
+                // Mark that we're retrying due to closed conversation
+                payload._retryDueToClosed = true;
+                continue;
+              }
+            }
+            
             // Don't retry on client errors (4xx)
             if (response.status >= 400 && response.status < 500) {
               throw new Error(`Failed to send message: ${response.status} ${response.statusText} - ${errorText}`);
@@ -282,6 +305,16 @@ export class ChatAPI {
           }
 
           const data = await response.json();
+          
+          // Check if response indicates conversation is closed
+          const wasClosed = data.closed_at || data.conversation_closed;
+          if (wasClosed) {
+            console.log('[ChatAPI] Response indicates conversation is closed, clearing stored conversation data');
+            clearConversation();
+          }
+          
+          // Check if we retried due to closed conversation
+          const retriedDueToClosed = payload._retryDueToClosed === true;
           
           // Update sessionId if backend returns a new one
           if (data.sessionId && data.sessionId !== sessionInfo.sessionId) {
@@ -297,6 +330,7 @@ export class ChatAPI {
           return {
             success: true,
             message: data.message,
+            conversationClosed: wasClosed || retriedDueToClosed,
           };
         } catch (error) {
           lastError = error instanceof Error ? error : new Error('Unknown error');

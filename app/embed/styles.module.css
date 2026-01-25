@@ -104,6 +104,24 @@
   align-self: flex-start;
 }
 
+.messageSystem {
+  align-self: center;
+  max-width: 85%;
+  margin: 8px 0;
+}
+
+.messageSystemContent {
+  padding: 8px 12px;
+  border-radius: 12px;
+  font-size: 12px;
+  line-height: 1.4;
+  background: #fef3c7;
+  color: #92400e;
+  border: 1px solid #fde68a;
+  text-align: center;
+  font-style: italic;
+}
+
 .messageContent {
   padding: 10px 14px;
   border-radius: 12px;

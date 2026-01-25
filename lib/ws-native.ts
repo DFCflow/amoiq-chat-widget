@@ -49,6 +49,7 @@ export interface ConversationInitResponse {
   integration_id?: string;
   site_id?: string;
   expires_in: number;
+  closed_at?: string | null; // If present, conversation is closed
 }
 
 export class ChatWebSocketNative {
@@ -219,6 +220,15 @@ export class ChatWebSocketNative {
 
       const data: ConversationInitResponse = await response.json();
       
+      // Check if conversation is closed
+      if (data.closed_at) {
+        console.log('[Socket.IO] Conversation is closed (closed_at:', data.closed_at, '), clearing stored conversation data');
+        // Clear stored conversation data since it's closed
+        clearConversation();
+        // Don't store the closed conversation's IDs - user should start a new conversation
+        // But we still need the token and connection info for the new conversation
+      }
+      
       this.conversationId = data.conversation_id;
       this.visitorId = data.visitor_id;
       this.wsToken = data.ws_token;
@@ -228,8 +238,13 @@ export class ChatWebSocketNative {
       const expiresInMs = (data.expires_in || 900) * 1000; // Default 15 minutes (900s) if not provided
       this.tokenExpiresAt = Date.now() + expiresInMs;
       
-      // Store conversation ID and visitor ID in localStorage with expiration timestamp
-      setConversationId(data.conversation_id, data.visitor_id);
+      // Only store conversation ID and visitor ID if conversation is NOT closed
+      if (!data.closed_at) {
+        setConversationId(data.conversation_id, data.visitor_id);
+      } else {
+        // Conversation is closed - don't persist it, user will get a new one on next message
+        console.log('[Socket.IO] Not storing closed conversation IDs - new conversation will be created on next message');
+      }
       
       // Schedule proactive token refresh (refresh at 80% of expiration time)
       this.scheduleTokenRefresh(expiresInMs * 0.8);
