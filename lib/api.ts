@@ -365,6 +365,8 @@ export class ChatAPI {
     ws_token: string;
     ws_server_url: string;
     tenant_id: string;
+    integration_id?: string;
+    site_id?: string;
     expires_in: number;
   } | null> {
     try {

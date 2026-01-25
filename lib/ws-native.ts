@@ -46,11 +46,15 @@ export interface ConversationInitResponse {
   ws_token: string;
   ws_server_url: string;
   tenant_id: string;
+  integration_id?: string;
+  site_id?: string;
   expires_in: number;
 }
 
 export class ChatWebSocketNative {
   private tenantId: string | null;
+  private integrationId?: string;
+  private siteId?: string;
   private socket: Socket | null = null;
   private callbacks: WebSocketCallbacks;
   private reconnectAttempts = 0;
@@ -208,6 +212,13 @@ export class ChatWebSocketNative {
       this.visitorId = data.visitor_id;
       this.wsToken = data.ws_token;
       this.wsServerUrl = data.ws_server_url;
+      // Extract additional fields from Gateway response
+      if (data.integration_id) {
+        this.integrationId = data.integration_id;
+      }
+      if (data.site_id) {
+        this.siteId = data.site_id;
+      }
       // Extract tenant_id from response (Gateway should return it)
       const receivedTenantId = data.tenant_id;
       
@@ -273,6 +284,8 @@ export class ChatWebSocketNative {
         tenant_id: this.tenantId,
         tenant_id_type: typeof this.tenantId,
         tenant_id_value: this.tenantId,
+        integration_id: this.integrationId,
+        site_id: this.siteId,
         ws_server_url: this.wsServerUrl,
         expires_in: data.expires_in,
       });
