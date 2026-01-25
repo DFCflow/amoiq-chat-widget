@@ -23,8 +23,9 @@ export default function EmbedPage() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputValue, setInputValue] = useState('');
   const [isConnected, setIsConnected] = useState(false);
-  const [isLoading, setIsLoading] = useState(true);
+  const [isLoading, setIsLoading] = useState(false); // Start as false - only show loading when initializing
   const [wsError, setWsError] = useState<string | null>(null);
+  const [isInitialized, setIsInitialized] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const wsRef = useRef<ChatWebSocketNative | null>(null);
   const apiRef = useRef<ChatAPI | null>(null);
@@ -219,123 +220,135 @@ export default function EmbedPage() {
     // Pass tenantId (can be null) - Gateway will resolve from domain if not provided
     apiRef.current = new ChatAPI(tid, websiteInfo, userId, userInfo);
     
-    // Initialize WebSocket with new native WebSocket client (Gateway plan)
-    const initializeWebSocket = async () => {
-      try {
-        // Create WebSocket client
-        // Pass tenantId (can be null) - Gateway will resolve from domain if not provided
-        wsRef.current = new ChatWebSocketNative(tid, {
-          onMessage: (message) => {
-            setMessages((prev) => {
-              // If message has an ID, try to update existing message (for delivery status)
-              if (message.id) {
-                const existingIndex = prev.findIndex((m) => m.id === message.id);
-                if (existingIndex >= 0) {
-                  // Update existing message (mark as delivered)
-                  const updated = [...prev];
-                  updated[existingIndex] = {
-                    ...updated[existingIndex],
-                    ...message,
-                    deliveryStatus: 'delivered' as const,
-                  };
-                  return updated;
-                }
-              }
-
-              // Try to match by text content and sender (for user messages that need status update)
-              if (message.sender === 'user' && message.text) {
-                const pendingUserMessage = prev.find(
-                  (m) => 
-                    m.sender === 'user' && 
-                    m.text === message.text && 
-                    m.deliveryStatus === 'pending' &&
-                    // Match messages within last 30 seconds
-                    Math.abs(new Date(m.timestamp).getTime() - new Date(message.timestamp || Date.now()).getTime()) < 30000
-                );
-                
-                if (pendingUserMessage) {
-                  // Update the pending message with the real ID and mark as delivered
-                  return prev.map((m) => 
-                    m.id === pendingUserMessage.id
-                      ? { ...message, deliveryStatus: 'delivered' as const }
-                      : m
-                  );
-                }
-              }
-
-              // New message from server (agent/bot response or unmatched user message)
-              return [...prev, { ...message, deliveryStatus: 'delivered' as const }];
-            });
-          },
-          onConnect: () => {
-            console.log('[Widget] WebSocket connected successfully');
-            setIsConnected(true);
-            setIsLoading(false);
-            setWsError(null);
-          },
-          onDisconnect: () => {
-            setIsConnected(false);
-          },
-          onError: (error) => {
-            console.error('WebSocket error:', error);
-            setWsError(error.message || 'WebSocket connection failed');
-            setIsLoading(false);
-            // Allow input even if WebSocket fails - will use HTTP API fallback
-            setIsConnected(false);
-          },
-        }, websiteInfo, false, userId, userInfo);
-
-        // Step 1: Initialize conversation and get JWT token
-        console.log('[Widget] Initializing conversation...');
-        const initResult = await wsRef.current.initialize();
-        
-        if (!initResult) {
-          throw new Error('Failed to initialize conversation');
-        }
-
-        // Step 2: Connect WebSocket with JWT token
-        console.log('[Widget] Connecting WebSocket...');
-        wsRef.current.connect();
-      } catch (error) {
-        console.error('[Widget] Failed to initialize WebSocket:', error);
-        setWsError(error instanceof Error ? error.message : 'WebSocket initialization failed');
-        setIsLoading(false);
-        setIsConnected(false);
-      }
-    };
-
-    initializeWebSocket();
-
-    // Load conversation history on mount
-    const loadConversationHistory = async () => {
-      if (!apiRef.current) return;
-      
-      try {
-        console.log('[Widget] Loading conversation history...');
-        const history = await apiRef.current.getMessages();
-        
-        if (history.length > 0) {
-          console.log(`[Widget] Loaded ${history.length} messages from history`);
-          setMessages(history);
-        } else {
-          console.log('[Widget] No conversation history found');
-        }
-      } catch (error) {
-        console.error('[Widget] Failed to load conversation history:', error);
-        // Don't block UI - continue even if history fails to load
-      } finally {
-        setIsLoading(false);
-      }
-    };
-
-    // Load history after a short delay to allow WebSocket to connect first
-    const historyTimer = setTimeout(loadConversationHistory, 500);
-
+    // Don't initialize WebSocket on mount - wait for user interaction
+    // This prevents unnecessary API calls on every page refresh
+    // WebSocket will be initialized when user first interacts with the chat
+    
     return () => {
-      clearTimeout(historyTimer);
       wsRef.current?.disconnect();
     };
   }, []);
+
+  // Initialize WebSocket only when needed (lazy initialization)
+  const initializeWebSocket = async () => {
+    if (isInitialized || wsRef.current) {
+      return; // Already initialized
+    }
+    
+    setIsLoading(true);
+    setIsInitialized(true);
+    
+    try {
+      // Get website info and user info again (in case they changed)
+      const websiteInfo = getWebsiteInfo();
+      const { userId, userInfo } = getUserInfo();
+      const params = new URLSearchParams(window.location.search);
+      const tid = params.get('tenantId') || params.get('tenant');
+      
+      // Create WebSocket client
+      // Pass tenantId (can be null) - Gateway will resolve from domain if not provided
+      wsRef.current = new ChatWebSocketNative(tid, {
+        onMessage: (message) => {
+          setMessages((prev) => {
+            // If message has an ID, try to update existing message (for delivery status)
+            if (message.id) {
+              const existingIndex = prev.findIndex((m) => m.id === message.id);
+              if (existingIndex >= 0) {
+                // Update existing message (mark as delivered)
+                const updated = [...prev];
+                updated[existingIndex] = {
+                  ...updated[existingIndex],
+                  ...message,
+                  deliveryStatus: 'delivered' as const,
+                };
+                return updated;
+              }
+            }
+
+            // Try to match by text content and sender (for user messages that need status update)
+            if (message.sender === 'user' && message.text) {
+              const pendingUserMessage = prev.find(
+                (m) => 
+                  m.sender === 'user' && 
+                  m.text === message.text && 
+                  m.deliveryStatus === 'pending' &&
+                  // Match messages within last 30 seconds
+                  Math.abs(new Date(m.timestamp).getTime() - new Date(message.timestamp || Date.now()).getTime()) < 30000
+              );
+              
+              if (pendingUserMessage) {
+                // Update the pending message with the real ID and mark as delivered
+                return prev.map((m) => 
+                  m.id === pendingUserMessage.id
+                    ? { ...message, deliveryStatus: 'delivered' as const }
+                    : m
+                );
+              }
+            }
+
+            // New message from server (agent/bot response or unmatched user message)
+            return [...prev, { ...message, deliveryStatus: 'delivered' as const }];
+          });
+        },
+        onConnect: () => {
+          console.log('[Widget] WebSocket connected successfully');
+          setIsConnected(true);
+          setIsLoading(false);
+          setWsError(null);
+          
+          // Load conversation history after connection
+          loadConversationHistory();
+        },
+        onDisconnect: () => {
+          setIsConnected(false);
+        },
+        onError: (error) => {
+          console.error('WebSocket error:', error);
+          setWsError(error.message || 'WebSocket connection failed');
+          setIsLoading(false);
+          setIsConnected(false);
+        },
+      }, websiteInfo, false, userId, userInfo);
+
+      // Step 1: Initialize conversation and get JWT token
+      console.log('[Widget] Initializing conversation...');
+      const initResult = await wsRef.current.initialize();
+      
+      if (!initResult) {
+        throw new Error('Failed to initialize conversation');
+      }
+
+      // Step 2: Connect WebSocket with JWT token
+      console.log('[Widget] Connecting WebSocket...');
+      wsRef.current.connect();
+    } catch (error) {
+      console.error('[Widget] Failed to initialize WebSocket:', error);
+      setWsError(error instanceof Error ? error.message : 'WebSocket initialization failed');
+      setIsLoading(false);
+      setIsConnected(false);
+      setIsInitialized(false); // Allow retry
+    }
+  };
+
+  // Load conversation history
+  const loadConversationHistory = async () => {
+    if (!apiRef.current) return;
+    
+    try {
+      console.log('[Widget] Loading conversation history...');
+      const history = await apiRef.current.getMessages();
+      
+      if (history.length > 0) {
+        console.log(`[Widget] Loaded ${history.length} messages from history`);
+        setMessages(history);
+      } else {
+        console.log('[Widget] No conversation history found');
+      }
+    } catch (error) {
+      console.error('[Widget] Failed to load conversation history:', error);
+      // Don't block UI - continue even if history fails to load
+    }
+  };
 
   useEffect(() => {
     // Auto-scroll to bottom when new messages arrive
@@ -344,6 +357,13 @@ export default function EmbedPage() {
 
   const handleSend = async () => {
     if (!inputValue.trim()) return;
+
+    // Initialize WebSocket if not already initialized (lazy initialization)
+    if (!isInitialized && !wsRef.current) {
+      await initializeWebSocket();
+      // Wait a bit for connection to establish
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
 
     const messageText = inputValue.trim();
     setInputValue('');
@@ -387,11 +407,17 @@ export default function EmbedPage() {
           });
         }
       } else {
-        throw new Error('No connection available');
+        throw new Error('No connection available. Please try again.');
       }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       console.error('[Widget] Failed to send message:', errorMessage, error);
+      
+      // Check if error is about missing integration_id
+      if (errorMessage.includes('integration_id')) {
+        setWsError('integration_id is required. Please check Gateway configuration.');
+      }
+      
       // Update message status to failed
       setMessages((prev) => {
         return prev.map((m) => 

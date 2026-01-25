@@ -582,6 +582,23 @@ export class ChatWebSocketNative {
       throw error;
     }
 
+    // integration_id is REQUIRED by the server - throw error if not available
+    if (!this.integrationId) {
+      const error = new Error(
+        'integration_id is required but not available. Gateway must return integration_id in /webchat/init response or include it in JWT token payload.'
+      );
+      console.error('[Socket.IO] ERROR - Missing integration_id:', {
+        tenantId: this.tenantId,
+        integrationId: this.integrationId,
+        siteId: this.siteId,
+        conversation_id: this.conversationId,
+        visitor_id: this.visitorId,
+        has_ws_token: !!this.wsToken,
+        has_ws_server_url: !!this.wsServerUrl,
+      });
+      throw error;
+    }
+
     // Prepare message payload according to Gateway plan
     // Server might expect tenant_id (snake_case) or tenantId (camelCase) - send both to be safe
     const message: any = {
