@@ -351,118 +351,96 @@ export default function EmbedPage() {
             // Normalize message format - ensure sender type is consistent
             // Handle different server formats (sender_type, sender, etc.)
             let normalizedMessage = { ...message };
+            
+            // Priority: sender_type > sender > default
             if (message.sender_type) {
               normalizedMessage.sender = message.sender_type === 'user' ? 'user' : (message.sender_type === 'agent' ? 'agent' : 'bot');
-            }
-            // Ensure sender is one of the valid types
-            if (!normalizedMessage.sender || !['user', 'bot', 'agent', 'system'].includes(normalizedMessage.sender)) {
-              normalizedMessage.sender = 'bot'; // Default to bot if unknown
+            } else if (message.sender) {
+              normalizedMessage.sender = message.sender;
             }
             
-            // If message has an ID, try to update existing message (for delivery status)
-            if (normalizedMessage.id) {
-              const existingIndex = prev.findIndex((m) => m.id === normalizedMessage.id);
-              if (existingIndex >= 0) {
-                // Update existing message (mark as delivered)
-                const updated = [...prev];
-                updated[existingIndex] = {
-                  ...updated[existingIndex],
-                  ...normalizedMessage,
-                  deliveryStatus: 'delivered' as const,
-                };
-                return updated;
+            // Ensure sender is one of the valid types
+            if (!normalizedMessage.sender || !['user', 'bot', 'agent', 'system'].includes(normalizedMessage.sender)) {
+              // Try to infer from other fields
+              if ((message as any).userId || (message as any).user_id || (message as any).visitor_id) {
+                normalizedMessage.sender = 'user'; // Likely a user message if it has userId
+              } else {
+                normalizedMessage.sender = 'bot'; // Default to bot if unknown
               }
             }
-
-            // Try to match by text content and sender (for user messages that need status update)
-            // Priority: 1) Pending messages (optimistic updates), 2) Any existing user message, 3) General duplicates
-            if (normalizedMessage.text) {
-              const messageTime = new Date(normalizedMessage.timestamp || Date.now()).getTime();
-              
-              // FIRST: Check for pending user message with matching text (most likely match)
-              // This catches the optimistic message we just added
-              const pendingUserMessage = prev.find(
-                (m) => 
-                  m.sender === 'user' && 
-                  m.text === normalizedMessage.text && 
-                  m.deliveryStatus === 'pending' &&
-                  // Match messages within last 60 seconds (very lenient for pending messages)
-                  Math.abs(new Date(m.timestamp).getTime() - messageTime) < 60000
-              );
-              
-              if (pendingUserMessage) {
-                // Update the pending message with the real ID and mark as delivered
-                console.log('[Widget] Updating pending user message:', normalizedMessage.text, 'with ID:', normalizedMessage.id);
+            
+            // Store original sender_type for matching
+            if (message.sender_type && !normalizedMessage.sender_type) {
+              (normalizedMessage as any).sender_type = message.sender_type;
+            }
+            
+            // STEP 1: Check if message with same ID already exists (simple deduplication by ID)
+            if (normalizedMessage.id) {
+              const existingById = prev.find((m) => m.id === normalizedMessage.id);
+              if (existingById) {
+                // Message with this ID already exists - just update it
+                console.log('[Widget] Message with ID already exists, updating:', normalizedMessage.id);
                 return prev.map((m) => 
-                  m.id === pendingUserMessage.id
+                  m.id === normalizedMessage.id
                     ? { 
-                        ...normalizedMessage, 
-                        sender: 'user' as const, // Ensure it stays as user message
+                        ...m, // Keep existing properties
+                        ...normalizedMessage, // Update with new data
                         deliveryStatus: 'delivered' as const,
-                        // Keep original timestamp (from when user sent it)
-                        timestamp: m.timestamp
+                        // Preserve original sender and timestamp if they're better
+                        sender: m.sender || normalizedMessage.sender,
+                        timestamp: m.timestamp || normalizedMessage.timestamp
                       }
                     : m
                 );
               }
+            }
+
+            // STEP 2: If message has a real ID (not temp) and we have a pending message with same text
+            // This handles the case: optimistic message (temp ID) → server echo (real ID)
+            if (normalizedMessage.id && 
+                normalizedMessage.id.startsWith('temp-') === false && 
+                normalizedMessage.text) {
+              const messageTime = new Date(normalizedMessage.timestamp || Date.now()).getTime();
               
-              // SECOND: For user messages, check for ANY existing user message with same text
-              // This prevents duplicates when server echoes back user messages
-              // Check if this is a user message (from server response)
-              const isUserMessage = normalizedMessage.sender === 'user' || 
-                                   normalizedMessage.sender_type === 'user' ||
-                                   (normalizedMessage as any).sender_type === 'user';
+              // Find pending message with same text (the optimistic one we added)
+              const pendingMessage = prev.find(
+                (m) => 
+                  m.text === normalizedMessage.text && 
+                  m.deliveryStatus === 'pending' &&
+                  // Match within last 60 seconds
+                  Math.abs(new Date(m.timestamp).getTime() - messageTime) < 60000
+              );
               
-              if (isUserMessage) {
-                const existingUserMessage = prev.find(
-                  (m) => 
-                    m.sender === 'user' && 
-                    m.text === normalizedMessage.text && 
-                    // Match messages within last 60 seconds (lenient for server echoes)
-                    Math.abs(new Date(m.timestamp).getTime() - messageTime) < 60000
+              if (pendingMessage) {
+                // Replace the pending message with the real one from server
+                console.log('[Widget] Replacing pending message with server message:', normalizedMessage.text, 'ID:', normalizedMessage.id);
+                return prev.map((m) => 
+                  m.id === pendingMessage.id
+                    ? { 
+                        ...normalizedMessage,
+                        sender: m.sender || normalizedMessage.sender, // Preserve original sender
+                        deliveryStatus: 'delivered' as const,
+                        timestamp: m.timestamp // Keep original timestamp
+                      }
+                    : m
                 );
-                
-                if (existingUserMessage) {
-                  // Update the existing message with the real ID and mark as delivered
-                  console.log('[Widget] Updating existing user message:', normalizedMessage.text);
-                  return prev.map((m) => 
-                    m.id === existingUserMessage.id
-                      ? { 
-                          ...normalizedMessage, 
-                          sender: 'user' as const, // Ensure it stays as user message
-                          deliveryStatus: 'delivered' as const,
-                          // Keep original timestamp
-                          timestamp: m.timestamp
-                        }
-                      : m
-                  );
-                }
               }
-              
-              // THIRD: General duplicate check for any message type (within 10 seconds)
-              // This catches any other duplicates that might have slipped through
-              const duplicateMessage = prev.find(
+            }
+
+            // STEP 3: Check for duplicates by text and sender (within 10 seconds)
+            // This catches any other duplicates
+            if (normalizedMessage.text) {
+              const messageTime = new Date(normalizedMessage.timestamp || Date.now()).getTime();
+              const duplicate = prev.find(
                 (m) => 
                   m.text === normalizedMessage.text &&
                   m.sender === normalizedMessage.sender &&
                   Math.abs(new Date(m.timestamp).getTime() - messageTime) < 10000
               );
               
-              if (duplicateMessage) {
-                // Message already exists, just update it if needed (maybe update ID if we have a real one)
-                console.log('[Widget] Duplicate message detected, skipping:', normalizedMessage.text);
-                // If we have a real ID and the duplicate has a temp ID, update it
-                if (normalizedMessage.id && 
-                    normalizedMessage.id.startsWith('temp-') === false && 
-                    duplicateMessage.id && 
-                    duplicateMessage.id.startsWith('temp-')) {
-                  return prev.map((m) => 
-                    m.id === duplicateMessage.id
-                      ? { ...normalizedMessage, deliveryStatus: 'delivered' as const }
-                      : m
-                  );
-                }
-                // Otherwise, just skip adding the duplicate
+              if (duplicate) {
+                // Duplicate found - skip adding it
+                console.log('[Widget] Duplicate message detected by text, skipping:', normalizedMessage.text);
                 return prev;
               }
             }
