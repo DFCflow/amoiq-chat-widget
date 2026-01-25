@@ -559,6 +559,16 @@ export class ChatWebSocketNative {
       ...this.websiteInfo,
     };
 
+    // Add integration_id and site_id if available (from Gateway response)
+    if (this.integrationId) {
+      message.integration_id = this.integrationId;
+      message.integrationId = this.integrationId;  // Send both formats
+    }
+    if (this.siteId) {
+      message.site_id = this.siteId;
+      message.siteId = this.siteId;  // Send both formats
+    }
+
     if (this.userId) {
       message.userId = this.userId;
       if (this.userInfo) {
