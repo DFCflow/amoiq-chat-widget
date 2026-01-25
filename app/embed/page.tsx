@@ -418,7 +418,10 @@ export default function EmbedPage() {
                 // Message already exists, just update it if needed (maybe update ID if we have a real one)
                 console.log('[Widget] Duplicate message detected, skipping:', normalizedMessage.text);
                 // If we have a real ID and the duplicate has a temp ID, update it
-                if (normalizedMessage.id && normalizedMessage.id.startsWith('temp-') === false && duplicateMessage.id.startsWith('temp-')) {
+                if (normalizedMessage.id && 
+                    normalizedMessage.id.startsWith('temp-') === false && 
+                    duplicateMessage.id && 
+                    duplicateMessage.id.startsWith('temp-')) {
                   return prev.map((m) => 
                     m.id === duplicateMessage.id
                       ? { ...normalizedMessage, deliveryStatus: 'delivered' as const }
