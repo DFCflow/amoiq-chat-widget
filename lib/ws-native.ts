@@ -211,26 +211,59 @@ export class ChatWebSocketNative {
       // Extract tenant_id from response (Gateway should return it)
       const receivedTenantId = data.tenant_id;
       
+      // Also try to extract tenant_id from JWT token payload (fallback)
+      let tokenTenantId: string | null = null;
+      if (this.wsToken) {
+        try {
+          const base64Url = this.wsToken.split('.')[1];
+          const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+          const jsonPayload = decodeURIComponent(atob(base64).split('').map((c) => {
+            return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);
+          }).join(''));
+          const tokenPayload = JSON.parse(jsonPayload);
+          // Check for tenant_id in token (could be tenant_id, tenantId, or tenant_id)
+          tokenTenantId = tokenPayload.tenant_id || tokenPayload.tenantId || tokenPayload.tenant_id || null;
+        } catch (e) {
+          console.warn('[Socket.IO] DEBUG - Could not extract tenant_id from token:', e);
+        }
+      }
+      
       // Validate tenant_id - reject placeholder values
       const placeholderValues = ['your-tenant-id', 'tenant-id', 'your_tenant_id', 'tenant_id', ''];
+      
+      // Priority: 1) Gateway response, 2) JWT token payload, 3) constructor value
+      let finalTenantId: string | null = null;
+      
       if (receivedTenantId && !placeholderValues.includes(String(receivedTenantId).toLowerCase())) {
-        this.tenantId = receivedTenantId;
-      } else if (receivedTenantId) {
+        finalTenantId = receivedTenantId;
+      } else if (tokenTenantId && !placeholderValues.includes(String(tokenTenantId).toLowerCase())) {
+        finalTenantId = tokenTenantId;
+        console.log('[Socket.IO] Using tenant_id from JWT token payload');
+      } else if (this.tenantId && !placeholderValues.includes(String(this.tenantId).toLowerCase())) {
+        finalTenantId = this.tenantId;
+        console.log('[Socket.IO] Using tenant_id from constructor');
+      }
+      
+      if (receivedTenantId && placeholderValues.includes(String(receivedTenantId).toLowerCase())) {
         console.error('[Socket.IO] ERROR - Gateway returned placeholder tenant_id:', receivedTenantId);
         console.error('[Socket.IO] Gateway should return actual tenant_id, not a placeholder');
-        // Keep existing tenantId if Gateway returned placeholder
-      } else {
-        // Gateway didn't return tenant_id, keep existing value
-        console.warn('[Socket.IO] WARNING - Gateway did not return tenant_id in response');
+      } else if (!receivedTenantId) {
+        console.warn('[Socket.IO] WARNING - Gateway did not return tenant_id in response body');
       }
+      
+      this.tenantId = finalTenantId;
       
       // Log where tenantId came from
       console.log('[Socket.IO] DEBUG - tenantId source:', {
-        from_gateway: receivedTenantId,
+        from_gateway_response: receivedTenantId,
         from_gateway_type: typeof receivedTenantId,
-        is_placeholder: receivedTenantId && placeholderValues.includes(String(receivedTenantId).toLowerCase()),
+        from_jwt_token: tokenTenantId,
+        from_jwt_token_type: typeof tokenTenantId,
+        from_constructor: this.tenantId !== finalTenantId ? this.tenantId : null,
+        is_placeholder: finalTenantId && placeholderValues.includes(String(finalTenantId).toLowerCase()),
         final_tenantId: this.tenantId,
         final_tenantId_type: typeof this.tenantId,
+        full_response: data,  // Show full Gateway response
       });
 
       // Debug logging - show tenantId details
@@ -252,7 +285,8 @@ export class ChatWebSocketNative {
         has_ws_token: !!data.ws_token,
         has_ws_server_url: !!data.ws_server_url,
         expires_in: data.expires_in,
-        full_response: data,  // Full response for debugging
+        full_response: data,  // Full response for debugging - check if tenant_id is here
+        response_keys: Object.keys(data),  // Show all keys in response
       });
       // Decode JWT token to see payload (without verification)
       let tokenPayload: any = null;
