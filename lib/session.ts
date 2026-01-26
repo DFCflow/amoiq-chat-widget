@@ -10,6 +10,7 @@ const FINGERPRINT_KEY = 'chat_fingerprint';
 const CONVERSATION_ID_KEY = 'chat_conversation_id';
 const VISITOR_ID_KEY = 'chat_visitor_id';
 const CONVERSATION_CREATED_KEY = 'chat_conversation_created';
+const SENDER_NAME_KEY = 'chat_sender_name';
 
 export interface SessionInfo {
   sessionId: string;
@@ -323,6 +324,44 @@ export function isConversationExpired(): boolean {
     return age >= maxAge;
   } catch {
     return true;
+  }
+}
+
+/**
+ * Get sender name from localStorage
+ */
+export function getSenderName(): string | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    return localStorage.getItem(SENDER_NAME_KEY);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Set sender name in localStorage
+ */
+export function setSenderName(name: string): void {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.setItem(SENDER_NAME_KEY, name);
+    console.log('[Session] Stored sender name:', name);
+  } catch (error) {
+    console.warn('[Session] Failed to store sender name:', error);
+  }
+}
+
+/**
+ * Clear sender name from localStorage
+ */
+export function clearSenderName(): void {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.removeItem(SENDER_NAME_KEY);
+    console.log('[Session] Sender name cleared');
+  } catch (error) {
+    console.warn('[Session] Failed to clear sender name:', error);
   }
 }
 

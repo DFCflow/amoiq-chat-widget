@@ -4,7 +4,7 @@
  * Production-ready with session management and user identification
  */
 
-import { getSessionInfo, refreshSession, getConversationId, clearConversation } from './session';
+import { getSessionInfo, refreshSession, getConversationId, clearConversation, getSenderName } from './session';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_GATEWAY_URL || process.env.NEXT_PUBLIC_API_URL || 'https://api-gateway-dfcflow.fly.dev';
 
@@ -50,6 +50,14 @@ export interface OnlineUser {
   domain?: string;
   origin?: string;
   url?: string;
+}
+
+export interface PresenceSessionResponse {
+  tenant_id: string;
+  site_id: string;
+  session_id: string;
+  ws_token: string;
+  websocket_url: string;
 }
 
 export class ChatAPI {
@@ -258,6 +266,12 @@ export class ChatAPI {
       }
       // If no userId, backend treats as anonymous user (uses sessionId + fingerprint)
 
+      // Add sender_name if available (from welcome message)
+      const senderName = getSenderName();
+      if (senderName) {
+        payload.sender_name = senderName;
+      }
+
       // Retry logic for production
       let lastError: Error | null = null;
       const maxRetries = 3;
@@ -451,6 +465,94 @@ export class ChatAPI {
     } catch (error) {
       console.error('[ChatAPI] Error initializing conversation:', error);
       return null;
+    }
+  }
+
+  /**
+   * Create presence session (called on page load)
+   * Initializes presence layer for online/offline tracking, idle timers, retargeting, AI greeting triggers
+   */
+  async createPresenceSession(): Promise<PresenceSessionResponse | null> {
+    try {
+      const sessionInfo = getSessionInfo();
+      
+      // Prepare payload with origin domain, user id, user name, email, user info
+      const payload: any = {
+        ...this.websiteInfo, // domain, origin, url, referrer, siteId
+        sessionId: sessionInfo.sessionId,
+        fingerprint: sessionInfo.fingerprint,
+      };
+
+      // Only add tenantId if available - Gateway will resolve from domain if not provided
+      if (this.tenantId) {
+        payload.tenantId = this.tenantId;
+      }
+
+      // Add user identification if logged in
+      if (this.userId) {
+        payload.userId = this.userId;
+        if (this.userInfo) {
+          payload.userInfo = this.userInfo;
+          // Extract name and email from userInfo if available
+          if (this.userInfo.name) {
+            payload.userName = this.userInfo.name;
+          }
+          if (this.userInfo.email) {
+            payload.email = this.userInfo.email;
+          }
+        }
+      }
+
+      const response = await fetch(`${this.baseUrl}/webchat/session`, {
+        method: 'POST',
+        headers: this.getHeaders(),
+        body: JSON.stringify(payload),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text().catch(() => response.statusText);
+        throw new Error(`Failed to create presence session: ${response.status} ${response.statusText} - ${errorText}`);
+      }
+
+      const data = await response.json();
+      return data;
+    } catch (error) {
+      console.error('[ChatAPI] Error creating presence session:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Open chat (called when user clicks chat bubble)
+   * Updates presence status to "bubble click"
+   */
+  async openChat(sessionId: string): Promise<boolean> {
+    try {
+      const payload: any = {
+        sessionId,
+        ...this.websiteInfo, // domain, origin, url, referrer, siteId
+      };
+
+      // Only add tenantId if available - Gateway will resolve from domain if not provided
+      if (this.tenantId) {
+        payload.tenantId = this.tenantId;
+      }
+
+      const response = await fetch(`${this.baseUrl}/webchat/open`, {
+        method: 'POST',
+        headers: this.getHeaders(),
+        body: JSON.stringify(payload),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text().catch(() => response.statusText);
+        throw new Error(`Failed to open chat: ${response.status} ${response.statusText} - ${errorText}`);
+      }
+
+      return true;
+    } catch (error) {
+      console.error('[ChatAPI] Error opening chat:', error);
+      return false;
     }
   }
 

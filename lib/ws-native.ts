@@ -4,7 +4,7 @@
  */
 
 import { io, Socket } from 'socket.io-client';
-import { getSessionInfo, refreshSession, getConversationId, setConversationId, getVisitorId, isConversationExpired, clearConversation } from './session';
+import { getSessionInfo, refreshSession, getConversationId, setConversationId, getVisitorId, isConversationExpired, clearConversation, getSenderName } from './session';
 
 export interface OnlineUser {
   userId: string;
@@ -23,6 +23,9 @@ export interface WebSocketCallbacks {
   onUserOnline?: (user: OnlineUser) => void;
   onUserOffline?: (userId: string) => void;
   onOnlineUsersList?: (users: OnlineUser[]) => void;
+  onConversationClosed?: () => void;
+  onConversationCreated?: (conversationId: string) => void;
+  onSessionUpdate?: (data: any) => void;
 }
 
 export interface WebsiteInfo {
@@ -73,6 +76,8 @@ export class ChatWebSocketNative {
   private tokenExpiresAt?: number; // Timestamp when token expires
   private tokenRefreshTimer?: ReturnType<typeof setTimeout>; // Timer for proactive refresh
   private gatewayUrl: string;
+  private presenceSessionId?: string; // Session ID from presence layer
+  private currentRoom?: string; // Current WebSocket room (session:{session_id} or conversation:{conversation_id})
 
   constructor(
     tenantId: string | null,
@@ -146,6 +151,151 @@ export class ChatWebSocketNative {
       };
     }
     return {};
+  }
+
+  /**
+   * Connect to presence WebSocket (for presence layer)
+   * Called on page load to track online/offline status
+   */
+  async connectPresence(wsToken: string, wsServerUrl: string, sessionId: string): Promise<void> {
+    if (typeof window === 'undefined') {
+      console.warn('[Socket.IO] Cannot connect presence: Socket.IO is only available in the browser');
+      return;
+    }
+
+    this.presenceSessionId = sessionId;
+    this.wsToken = wsToken;
+    this.wsServerUrl = wsServerUrl;
+
+    // Disconnect existing socket if it exists
+    if (this.socket && this.socket.connected) {
+      console.log('[Socket.IO] Disconnecting existing socket before connecting presence...');
+      this.socket.removeAllListeners();
+      this.socket.disconnect();
+      this.socket = null;
+    }
+
+    try {
+      console.log('[Socket.IO] Connecting to presence WebSocket:', wsServerUrl.replace(/\/\/.*@/, '//***@'));
+      
+      this.socket = io(wsServerUrl, {
+        auth: {
+          token: wsToken,
+        },
+        query: {
+          token: wsToken,
+        },
+        extraHeaders: {
+          'Authorization': `Bearer ${wsToken}`,
+        },
+        transports: ['websocket', 'polling'],
+        reconnection: true,
+        reconnectionAttempts: this.maxReconnectAttempts,
+        reconnectionDelay: 1000,
+        reconnectionDelayMax: 5000,
+      });
+
+      // Set up event listeners
+      this.setupPresenceEventListeners();
+      
+      // Wait for connection and join session room
+      this.socket.on('connect', () => {
+        console.log('[Socket.IO] ✅ Presence WebSocket connected');
+        this.reconnectAttempts = 0;
+        
+        // Join session room for presence tracking
+        if (this.socket && sessionId) {
+          const roomName = `session:${sessionId}`;
+          console.log('[Socket.IO] Joining presence room:', roomName);
+          this.socket.emit('join:session', { sessionId });
+          this.currentRoom = roomName;
+        }
+        
+        this.callbacks.onConnect?.();
+      });
+
+      this.socket.on('connect_error', (error: Error) => {
+        console.error('[Socket.IO] ❌ Presence connection error:', error);
+        this.reconnectAttempts++;
+        this.callbacks.onError?.(error);
+      });
+
+      this.socket.on('disconnect', (reason: string) => {
+        console.log('[Socket.IO] Presence disconnected:', reason);
+        this.callbacks.onDisconnect?.();
+      });
+    } catch (error) {
+      console.error('[Socket.IO] Error creating presence connection:', error);
+      this.callbacks.onError?.(error as Error);
+    }
+  }
+
+  /**
+   * Set up event listeners for presence WebSocket
+   */
+  private setupPresenceEventListeners(): void {
+    if (!this.socket) return;
+
+    // Listen for session updates
+    this.socket.on('session:update', (data: any) => {
+      console.log('[Socket.IO] Session update received:', data);
+      this.callbacks.onSessionUpdate?.(data);
+      
+      // If conversation_id is provided in update, switch to conversation room
+      if (data.conversation_id && !this.conversationId) {
+        console.log('[Socket.IO] Conversation ID received in session update, switching to conversation room');
+        this.conversationId = data.conversation_id;
+        this.switchToConversationRoom(data.conversation_id);
+      }
+    });
+
+    // Listen for conversation created events
+    this.socket.on('conversation:created', (data: { conversation_id: string }) => {
+      console.log('[Socket.IO] Conversation created event received:', data);
+      if (data.conversation_id) {
+        this.conversationId = data.conversation_id;
+        this.callbacks.onConversationCreated?.(data.conversation_id);
+        this.switchToConversationRoom(data.conversation_id);
+      }
+    });
+
+    // Listen for conversation closed events
+    this.socket.on('conversation:closed', (data: { conversation_id: string }) => {
+      console.log('[Socket.IO] Conversation closed event received:', data);
+      if (data.conversation_id === this.conversationId) {
+        this.callbacks.onConversationClosed?.();
+      }
+    });
+  }
+
+  /**
+   * Switch from session room to conversation room
+   */
+  switchToConversationRoom(conversationId: string): void {
+    if (!this.socket || !this.socket.connected) {
+      console.warn('[Socket.IO] Cannot switch room: not connected');
+      return;
+    }
+
+    // Leave session room if we're in it
+    if (this.currentRoom && this.currentRoom.startsWith('session:')) {
+      console.log('[Socket.IO] Leaving session room:', this.currentRoom);
+      this.socket.emit('leave:session', { sessionId: this.presenceSessionId });
+    }
+
+    // Join conversation room
+    const roomName = `conversation:${conversationId}`;
+    console.log('[Socket.IO] Joining conversation room:', roomName);
+    this.socket.emit('join:conversation', { conversationId });
+    this.currentRoom = roomName;
+
+    // Listen for joined confirmation
+    this.socket.once('joined', (data: { conversation_id: string; room: string }) => {
+      console.log('[Socket.IO] ✅ Joined conversation room:', {
+        conversation_id: data.conversation_id,
+        room: data.room,
+      });
+    });
   }
 
   /**
@@ -580,14 +730,19 @@ export class ChatWebSocketNative {
         });
         this.reconnectAttempts = 0;
         
-        // Join conversation room
+        // Join conversation room if we have conversationId
+        // If we're already in a session room, switchToConversationRoom will handle it
         if (this.conversationId && this.socket) {
           console.log('[Socket.IO] Joining conversation room:', this.conversationId);
-          this.socket.emit('join:conversation', { conversationId: this.conversationId });
+          this.switchToConversationRoom(this.conversationId);
+        } else if (this.presenceSessionId && this.socket) {
+          // If we have presence session but no conversation yet, stay in session room
+          console.log('[Socket.IO] Staying in session room, waiting for conversation_id');
         } else {
           console.warn('[Socket.IO] WARNING - Cannot join conversation room:', {
             has_conversation_id: !!this.conversationId,
             has_socket: !!this.socket,
+            has_presence_session: !!this.presenceSessionId,
           });
         }
         
@@ -805,6 +960,12 @@ export class ChatWebSocketNative {
       if (this.userInfo) {
         message.userInfo = this.userInfo;
       }
+    }
+
+    // Add sender_name if available (from welcome message)
+    const senderName = getSenderName();
+    if (senderName) {
+      message.sender_name = senderName;
     }
 
     // Debug logging - show complete message payload

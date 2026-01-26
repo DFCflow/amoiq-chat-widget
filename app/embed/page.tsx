@@ -4,7 +4,7 @@ import { useEffect, useState, useRef } from 'react';
 import { getTenantId } from '@/lib/tenant';
 import { ChatAPI, UserInfo } from '@/lib/api';
 import { ChatWebSocketNative } from '@/lib/ws-native';
-import { getSessionInfo, hasValidSession, getVisitorId, isConversationExpired, clearConversation } from '@/lib/session';
+import { getSessionInfo, hasValidSession, getVisitorId, isConversationExpired, clearConversation, getSenderName, setSenderName } from '@/lib/session';
 import styles from './styles.module.css';
 
 // Force dynamic rendering - no caching
@@ -82,6 +82,11 @@ export default function EmbedPage() {
   const [isLoading, setIsLoading] = useState(false); // Start as false - only show loading when initializing
   const [wsError, setWsError] = useState<string | null>(null);
   const [isInitialized, setIsInitialized] = useState(false);
+  const [presenceSession, setPresenceSession] = useState<{ session_id: string; ws_token: string; websocket_url: string } | null>(null);
+  const [chatState, setChatState] = useState<'closed' | 'name_prompt' | 'active'>('closed');
+  const [senderName, setSenderNameState] = useState<string | null>(null);
+  const [conversationClosed, setConversationClosed] = useState(false);
+  const [nameInputValue, setNameInputValue] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const wsRef = useRef<ChatWebSocketNative | null>(null);
   const apiRef = useRef<ChatAPI | null>(null);
@@ -265,6 +270,12 @@ export default function EmbedPage() {
     const { userId, userInfo } = getUserInfo();
     const sessionInfo = getSessionInfo();
     
+    // Check if sender name exists
+    const storedSenderName = getSenderName();
+    if (storedSenderName) {
+      setSenderNameState(storedSenderName);
+    }
+    
     // Check if session or conversation expired
     const sessionExpired = !hasValidSession();
     const conversationExpired = isConversationExpired();
@@ -300,6 +311,9 @@ export default function EmbedPage() {
     // Pass tenantId (can be null) - Gateway will resolve from domain if not provided
     apiRef.current = new ChatAPI(tid, websiteInfo, userId, userInfo);
     
+    // Initialize presence session on page load
+    initializePresenceSession();
+    
     // Only load history if session/conversation is still valid
     if (!sessionExpired && !conversationExpired) {
       loadConversationHistory();
@@ -307,9 +321,9 @@ export default function EmbedPage() {
     
     // Listen for chat open message from parent (when user clicks chat bubble)
     const handleMessage = (event: MessageEvent) => {
-      if (event.data?.type === 'amoiq-widget-open' && !isInitialized && !wsRef.current) {
-        console.log('[Widget] Chat opened, initializing WebSocket...');
-        initializeWebSocket();
+      if (event.data?.type === 'amoiq-widget-open') {
+        console.log('[Widget] Chat bubble clicked');
+        handleChatBubbleClick();
       }
     };
 
@@ -320,6 +334,167 @@ export default function EmbedPage() {
       wsRef.current?.disconnect();
     };
   }, [isInitialized]);
+
+  // Initialize presence session on page load
+  const initializePresenceSession = async () => {
+    if (!apiRef.current) return;
+    
+    try {
+      console.log('[Widget] Initializing presence session...');
+      const presenceResponse = await apiRef.current.createPresenceSession();
+      
+      if (!presenceResponse) {
+        console.error('[Widget] Failed to create presence session');
+        return;
+      }
+      
+      console.log('[Widget] Presence session created:', {
+        session_id: presenceResponse.session_id,
+        tenant_id: presenceResponse.tenant_id,
+        site_id: presenceResponse.site_id,
+      });
+      
+      setPresenceSession({
+        session_id: presenceResponse.session_id,
+        ws_token: presenceResponse.ws_token,
+        websocket_url: presenceResponse.websocket_url,
+      });
+      
+      // Connect to presence WebSocket
+      if (wsRef.current) {
+        await wsRef.current.connectPresence(
+          presenceResponse.ws_token,
+          presenceResponse.websocket_url,
+          presenceResponse.session_id
+        );
+      } else {
+        // Create WebSocket client for presence
+        const websiteInfo = getWebsiteInfo();
+        const { userId, userInfo } = getUserInfo();
+        const params = new URLSearchParams(window.location.search);
+        const tid = params.get('tenantId') || params.get('tenant');
+        
+        wsRef.current = new ChatWebSocketNative(tid, {
+          onConnect: () => {
+            console.log('[Widget] Presence WebSocket connected');
+            setIsConnected(true);
+          },
+          onDisconnect: () => {
+            setIsConnected(false);
+          },
+          onError: (error) => {
+            console.error('[Widget] Presence WebSocket error:', error);
+            setWsError(error.message || 'WebSocket connection failed');
+          },
+          onConversationCreated: (conversationId) => {
+            console.log('[Widget] Conversation created via WebSocket:', conversationId);
+            // Conversation was created by backend, update state
+            setChatState('active');
+          },
+          onConversationClosed: () => {
+            console.log('[Widget] Conversation closed due to inactivity');
+            setConversationClosed(true);
+            addSystemMessage('This conversation has been closed due to inactivity. You can start a new conversation at any time.');
+          },
+        }, websiteInfo, false, userId, userInfo);
+        
+        await wsRef.current.connectPresence(
+          presenceResponse.ws_token,
+          presenceResponse.websocket_url,
+          presenceResponse.session_id
+        );
+      }
+    } catch (error) {
+      console.error('[Widget] Error initializing presence session:', error);
+    }
+  };
+
+  // Handle chat bubble click
+  const handleChatBubbleClick = async () => {
+    if (!apiRef.current || !presenceSession) {
+      console.warn('[Widget] Cannot open chat: presence session not initialized');
+      return;
+    }
+    
+    try {
+      // Call /webchat/open endpoint
+      const opened = await apiRef.current.openChat(presenceSession.session_id);
+      if (!opened) {
+        console.error('[Widget] Failed to open chat');
+        return;
+      }
+      
+      // Show welcome message asking for name
+      if (!senderName) {
+        setChatState('name_prompt');
+        addSystemMessage('Welcome! Please enter your name to start chatting.');
+      } else {
+        // Already have name, proceed to conversation initialization
+        await initializeConversation();
+      }
+    } catch (error) {
+      console.error('[Widget] Error handling chat bubble click:', error);
+    }
+  };
+
+  // Handle name submission
+  const handleNameSubmit = async () => {
+    const name = nameInputValue.trim();
+    if (!name) return;
+    
+    // Store sender name
+    setSenderName(name);
+    setSenderNameState(name);
+    setNameInputValue('');
+    
+    // Show personalized greeting
+    addSystemMessage(`Hi ${name}, how can I help you today?`);
+    
+    // Initialize conversation
+    await initializeConversation();
+  };
+
+  // Initialize conversation after name entry
+  const initializeConversation = async () => {
+    if (!apiRef.current || !wsRef.current) {
+      console.warn('[Widget] Cannot initialize conversation: API or WebSocket not available');
+      return;
+    }
+    
+    setIsLoading(true);
+    setChatState('active');
+    
+    try {
+      // Call /webchat/init to create/get conversation
+      const storedVisitorId = getVisitorId();
+      console.log('[Widget] Initializing conversation...', storedVisitorId ? `(continuing with visitorId: ${storedVisitorId})` : '(new conversation)');
+      
+      const initResult = await apiRef.current.initializeConversation(storedVisitorId || undefined);
+      
+      if (!initResult) {
+        throw new Error('Failed to initialize conversation');
+      }
+      
+      // Check if conversation was closed
+      if (initResult.closed_at) {
+        console.log('[Widget] Previous conversation was closed, notifying user');
+        addSystemMessage('The previous conversation has been closed. Starting a new conversation.');
+        setConversationClosed(false); // Reset closed state
+      }
+      
+      // Switch to conversation room if WebSocket is connected
+      if (wsRef.current && wsRef.current.isConnected() && initResult.conversation_id) {
+        console.log('[Widget] Switching to conversation room:', initResult.conversation_id);
+        wsRef.current.switchToConversationRoom(initResult.conversation_id);
+      }
+      
+      setIsLoading(false);
+    } catch (error) {
+      console.error('[Widget] Failed to initialize conversation:', error);
+      setWsError(error instanceof Error ? error.message : 'Failed to initialize conversation');
+      setIsLoading(false);
+    }
+  };
 
   // Initialize WebSocket only when needed (lazy initialization)
   const initializeWebSocket = async () => {
@@ -605,10 +780,24 @@ export default function EmbedPage() {
   const handleSend = async () => {
     if (!inputValue.trim()) return;
 
-    // Initialize WebSocket if not already initialized (lazy initialization)
-    if (!isInitialized && !wsRef.current) {
-      await initializeWebSocket();
-      // initializeWebSocket now waits for connection, so we don't need extra delay
+    // If conversation is closed, sending a message will auto-reopen it
+    if (conversationClosed) {
+      setConversationClosed(false);
+      addSystemMessage('Reopening conversation...');
+    }
+
+    // If we're in name prompt state, treat input as name
+    if (chatState === 'name_prompt') {
+      setNameInputValue(inputValue.trim());
+      handleNameSubmit();
+      return;
+    }
+
+    // Initialize conversation if not already active
+    if (chatState === 'closed' && senderName) {
+      await initializeConversation();
+      // Wait a bit for conversation to initialize
+      await new Promise(resolve => setTimeout(resolve, 500));
     }
 
     const messageText = inputValue.trim();
@@ -647,12 +836,14 @@ export default function EmbedPage() {
         // Check if conversation was closed and retried
         if (response.conversationClosed) {
           addSystemMessage('The previous conversation has been closed. Starting a new conversation.');
+          setConversationClosed(false);
         }
         
         if (!response.success) {
           // Check if error is about closed conversation
           if (response.error && (response.error.toLowerCase().includes('closed') || response.error.includes('410'))) {
             addSystemMessage('The previous conversation has been closed. Starting a new conversation.');
+            setConversationClosed(false);
           }
           throw new Error(response.error || 'Failed to send message');
         }
@@ -772,28 +963,58 @@ export default function EmbedPage() {
       </div>
 
       <div className={styles.inputContainer}>
-        <input
-          type="text"
-          value={inputValue}
-          onChange={(e) => setInputValue(e.target.value)}
-          onKeyPress={(e) => {
-            if (e.key === 'Enter' && !e.shiftKey) {
-              e.preventDefault();
-              handleSend();
-            }
-          }}
-          placeholder="Type a message..."
-          className={styles.input}
-          disabled={isLoading}
-        />
-        <button
-          onClick={handleSend}
-          disabled={!inputValue.trim() || isLoading}
-          className={styles.sendButton}
-          aria-label="Send message"
-        >
-          →
-        </button>
+        {chatState === 'name_prompt' ? (
+          <>
+            <input
+              type="text"
+              value={nameInputValue}
+              onChange={(e) => setNameInputValue(e.target.value)}
+              onKeyPress={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  handleNameSubmit();
+                }
+              }}
+              placeholder="Enter your name..."
+              className={styles.input}
+              disabled={isLoading}
+              autoFocus
+            />
+            <button
+              onClick={handleNameSubmit}
+              disabled={!nameInputValue.trim() || isLoading}
+              className={styles.sendButton}
+              aria-label="Submit name"
+            >
+              →
+            </button>
+          </>
+        ) : (
+          <>
+            <input
+              type="text"
+              value={inputValue}
+              onChange={(e) => setInputValue(e.target.value)}
+              onKeyPress={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  handleSend();
+                }
+              }}
+              placeholder={conversationClosed ? "Type a message to reopen conversation..." : "Type a message..."}
+              className={styles.input}
+              disabled={isLoading}
+            />
+            <button
+              onClick={handleSend}
+              disabled={!inputValue.trim() || isLoading}
+              className={styles.sendButton}
+              aria-label="Send message"
+            >
+              →
+            </button>
+          </>
+        )}
       </div>
     </div>
   );
