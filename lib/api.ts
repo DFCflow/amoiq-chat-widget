@@ -422,6 +422,7 @@ export class ChatAPI {
     integration_id?: string;
     site_id?: string;
     expires_in: number;
+    closed_at?: string | null;
   } | null> {
     try {
       const sessionInfo = getSessionInfo();
