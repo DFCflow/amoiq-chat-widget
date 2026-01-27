@@ -299,6 +299,59 @@ export class ChatWebSocketNative {
         this.callbacks.onConversationClosed?.();
       }
     });
+
+    // ALSO listen for message events in session room (to catch messages before room switch)
+    // This handles race condition where backend broadcasts to both rooms simultaneously
+    this.socket.on('meta_message_created', (data: any) => {
+      console.log('[Socket.IO] ✅ meta_message_created event received in session room:', data);
+      const message = data.message || data;
+      
+      // Extract conversation_id from message
+      const messageConversationId = message.conversation_id;
+      
+      if (messageConversationId) {
+        // If we don't have conversationId yet, set it and switch rooms
+        if (!this.conversationId) {
+          console.log('[Widget] Conversation ID found in message, switching to conversation room:', messageConversationId);
+          this.conversationId = messageConversationId;
+          this.callbacks.onConversationCreated?.(messageConversationId);
+          this.switchToConversationRoom(messageConversationId);
+        }
+        // Process message if it belongs to our conversation
+        if (messageConversationId === this.conversationId) {
+          this.handleMessage(message);
+        }
+      } else {
+        // No conversation_id in message, process anyway (might be for our session)
+        this.handleMessage(message);
+      }
+    });
+
+    this.socket.on('message:new', (data: any) => {
+      console.log('[Socket.IO] ✅ message:new event received in session room:', data);
+      const rawMessage = data.message || data;
+      const message = this.transformMessageNewToMessage(rawMessage);
+      
+      // Extract conversation_id from transformed message
+      const messageConversationId = message.conversation_id;
+      
+      if (messageConversationId) {
+        // If we don't have conversationId yet, set it and switch rooms
+        if (!this.conversationId) {
+          console.log('[Widget] Conversation ID found in message:new, switching to conversation room:', messageConversationId);
+          this.conversationId = messageConversationId;
+          this.callbacks.onConversationCreated?.(messageConversationId);
+          this.switchToConversationRoom(messageConversationId);
+        }
+        // Process message if it belongs to our conversation
+        if (messageConversationId === this.conversationId) {
+          this.handleMessage(message);
+        }
+      } else {
+        // No conversation_id in message, process anyway (might be for our session)
+        this.handleMessage(message);
+      }
+    });
   }
 
   /**
