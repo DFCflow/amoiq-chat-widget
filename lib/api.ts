@@ -222,6 +222,34 @@ export class ChatAPI {
   }
 
   /**
+   * Get messages for a specific conversation
+   * Uses the /webchat/messages endpoint with conversationId parameter
+   */
+  async getConversationMessages(conversationId: string): Promise<any[]> {
+    try {
+      const response = await fetch(
+        `${this.baseUrl}/webchat/messages?conversationId=${conversationId}`,
+        {
+          method: 'GET',
+          headers: this.getHeaders(),
+        }
+      );
+      
+      if (!response.ok) {
+        console.error('[API] Failed to fetch messages:', response.statusText);
+        return [];
+      }
+      
+      const data = await response.json();
+      // API returns array directly, not wrapped in {messages: []}
+      return Array.isArray(data) ? data : (data.messages || []);
+    } catch (error) {
+      console.error('[API] Error fetching messages:', error);
+      return [];
+    }
+  }
+
+  /**
    * Send a message
    * Supports both anonymous and logged-in users
    * Backend determines user type based on payload (userId presence)

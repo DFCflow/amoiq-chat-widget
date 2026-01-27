@@ -263,6 +263,217 @@ export default function EmbedPage() {
     return {};
   };
 
+  /**
+   * Create message handler callback for WebSocket
+   * This handles incoming messages, normalizes them, and updates the message state
+   */
+  const createMessageHandler = () => {
+    return (message: any) => {
+      setMessages((prev) => {
+        // Debug: Log raw message received
+        console.log('[Widget] Raw message received in onMessage:', {
+          hasText: !!message.text,
+          hasMessageText: !!message.message_text,
+          text: message.text,
+          message_text: message.message_text,
+          id: message.id,
+          message_id: message.message_id,
+          messageId: message.messageId,
+          sender_type: message.sender_type,
+          sender: message.sender,
+          allKeys: Object.keys(message)
+        });
+        
+        // Normalize message format - ensure sender type is consistent
+        // Handle different server formats (sender_type, sender, etc.)
+        let normalizedMessage = { ...message };
+        
+        // Map messageId/message_id to id if present (server sends messageId or message_id, we expect id)
+        // Priority: message_id (from message:new) > messageId (from meta_message_created) > id
+        if (message.message_id && !normalizedMessage.id) {
+          normalizedMessage.id = message.message_id;
+        } else if (message.messageId && !normalizedMessage.id) {
+          normalizedMessage.id = message.messageId;
+        }
+        
+        // Map message_text to text if present (WebSocket sends message_text, we expect text)
+        if (message.message_text && !normalizedMessage.text) {
+          normalizedMessage.text = message.message_text;
+        } else if (!normalizedMessage.text && message.text) {
+          normalizedMessage.text = message.text;
+        }
+        
+        // Debug: Log normalized message
+        console.log('[Widget] Normalized message:', {
+          text: normalizedMessage.text,
+          id: normalizedMessage.id,
+          sender: normalizedMessage.sender,
+          timestamp: normalizedMessage.timestamp
+        });
+        
+        // Priority: sender_type > sender > default
+        if (message.sender_type) {
+          normalizedMessage.sender = message.sender_type === 'user' ? 'user' : (message.sender_type === 'agent' ? 'agent' : 'bot');
+        } else if (message.sender) {
+          // If sender is a UUID (user ID), infer it's a user message
+          const senderStr = String(message.sender);
+          if (senderStr.match(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i)) {
+            normalizedMessage.sender = 'user';
+          } else if (['user', 'bot', 'agent', 'system'].includes(senderStr)) {
+            normalizedMessage.sender = senderStr as 'user' | 'bot' | 'agent' | 'system';
+          } else {
+            normalizedMessage.sender = message.sender;
+          }
+        }
+        
+        // Ensure sender is one of the valid types
+        if (!normalizedMessage.sender || !['user', 'bot', 'agent', 'system'].includes(normalizedMessage.sender)) {
+          // Try to infer from other fields
+          if ((message as any).userId || (message as any).user_id || (message as any).visitor_id || (message as any).sender) {
+            // If sender is a UUID or we have user identifiers, it's a user message
+            const senderStr = String((message as any).sender || '');
+            if (senderStr.match(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i)) {
+              normalizedMessage.sender = 'user';
+            } else {
+              normalizedMessage.sender = 'user'; // Likely a user message if it has userId
+            }
+          } else {
+            normalizedMessage.sender = 'bot'; // Default to bot if unknown
+          }
+        }
+        
+        // Store original sender_type for matching
+        if (message.sender_type && !normalizedMessage.sender_type) {
+          (normalizedMessage as any).sender_type = message.sender_type;
+        }
+        
+        // STEP 1: Check if message with same ID already exists (simple deduplication by ID)
+        // Also check message_id field (message:new events use message_id as the actual message ID)
+        // message:new events have: id (event ID), message_id (actual message ID)
+        // meta_message_created events have: messageId (actual message ID)
+        const messageId = normalizedMessage.id || (message as any).messageId || (message as any).message_id;
+        console.log('[Widget] STEP 1 - Checking for duplicate by ID:', {
+          messageId,
+          normalizedId: normalizedMessage.id,
+          message_messageId: (message as any).messageId,
+          message_message_id: (message as any).message_id,
+          existingMessageIds: prev.map(m => m.id)
+        });
+        
+        if (messageId) {
+          const existingById = prev.find((m) => {
+            // Check if any existing message has the same ID
+            if (m.id === messageId) return true;
+            // Check if existing message has message_id that matches
+            if ((m as any).message_id === messageId) return true;
+            // Check if new message has message_id that matches existing message id
+            if ((message as any).message_id && m.id === (message as any).message_id) return true;
+            return false;
+          });
+          if (existingById) {
+            // Message with this ID already exists - just update it (don't add duplicate)
+            console.log('[Widget] STEP 1 - Message with ID already exists, skipping duplicate:', messageId);
+            return prev; // Don't add duplicate, just return existing messages
+          } else {
+            console.log('[Widget] STEP 1 - No duplicate found by ID, proceeding to STEP 2');
+          }
+        } else {
+          console.log('[Widget] STEP 1 - No message ID found, proceeding to STEP 2');
+        }
+
+        // STEP 2: If message has a real ID (not temp) and we have a pending message with same text
+        // This handles the case: optimistic message (temp ID) → server echo (real ID)
+        if (normalizedMessage.id && 
+            normalizedMessage.id.startsWith('temp-') === false && 
+            normalizedMessage.text) {
+          const messageTime = new Date(normalizedMessage.timestamp || Date.now()).getTime();
+          
+          // Debug: Log what we're looking for
+          console.log('[Widget] Looking for pending message to replace:', {
+            text: normalizedMessage.text,
+            sender: normalizedMessage.sender,
+            id: normalizedMessage.id,
+            timestamp: normalizedMessage.timestamp,
+            pendingMessages: prev.filter(m => m.deliveryStatus === 'pending').map(m => ({
+              text: m.text,
+              sender: m.sender,
+              id: m.id,
+              timestamp: m.timestamp
+            }))
+          });
+          
+          // Find pending message with same text (the optimistic one we added)
+          // Also match by sender to ensure we're replacing the right message
+          const pendingMessage = prev.find(
+            (m) => 
+              m.text === normalizedMessage.text && 
+              m.deliveryStatus === 'pending' &&
+              m.sender === normalizedMessage.sender &&
+              // Match within last 60 seconds
+              Math.abs(new Date(m.timestamp).getTime() - messageTime) < 60000
+          );
+          
+          if (pendingMessage) {
+            // Replace the pending message with the real one from server
+            console.log('[Widget] ✅ Replacing pending message with server message:', normalizedMessage.text, 'ID:', normalizedMessage.id);
+            return prev.map((m) => 
+              m.id === pendingMessage.id
+                ? { 
+                    ...normalizedMessage,
+                    sender: m.sender || normalizedMessage.sender, // Preserve original sender
+                    deliveryStatus: 'delivered' as const,
+                    timestamp: m.timestamp // Keep original timestamp
+                  }
+                : m
+            );
+          } else {
+            console.log('[Widget] ❌ No pending message found to replace. Check:', {
+              hasText: !!normalizedMessage.text,
+              textValue: normalizedMessage.text,
+              hasId: !!normalizedMessage.id,
+              idValue: normalizedMessage.id,
+              isTemp: normalizedMessage.id?.startsWith('temp-'),
+              pendingCount: prev.filter(m => m.deliveryStatus === 'pending').length
+            });
+          }
+        } else {
+          console.log('[Widget] ⚠️ Cannot match pending message - missing requirements:', {
+            hasId: !!normalizedMessage.id,
+            id: normalizedMessage.id,
+            isTemp: normalizedMessage.id?.startsWith('temp-'),
+            hasText: !!normalizedMessage.text,
+            text: normalizedMessage.text
+          });
+        }
+
+        // STEP 3: Check for duplicates by text and sender (within 10 seconds)
+        // BUT: Skip this check if message has a real ID (not temp) - it should replace pending or be new
+        // This catches duplicates that don't have IDs or are from other sources
+        if (normalizedMessage.text && 
+            (!normalizedMessage.id || normalizedMessage.id.startsWith('temp-'))) {
+          const messageTime = new Date(normalizedMessage.timestamp || Date.now()).getTime();
+          const duplicate = prev.find(
+            (m) => 
+              m.text === normalizedMessage.text &&
+              m.sender === normalizedMessage.sender &&
+              // Don't match pending messages - those should be replaced by STEP 2
+              m.deliveryStatus !== 'pending' &&
+              Math.abs(new Date(m.timestamp).getTime() - messageTime) < 10000
+          );
+          
+          if (duplicate) {
+            // Duplicate found - skip adding it
+            console.log('[Widget] Duplicate message detected by text, skipping:', normalizedMessage.text);
+            return prev;
+          }
+        }
+
+        // New message from server (agent/bot response or unmatched user message)
+        return [...prev, { ...normalizedMessage, deliveryStatus: 'delivered' as const }];
+      });
+    };
+  };
+
   useEffect(() => {
     // Get tenant ID from URL params (support both 'tenantId' and 'tenant')
     // tenantId is optional - Gateway will resolve it from domain if not provided
@@ -430,6 +641,7 @@ export default function EmbedPage() {
             setConversationClosed(true);
             addSystemMessage('This conversation has been closed due to inactivity. You can start a new conversation at any time.');
           },
+          onMessage: createMessageHandler(),
         }, websiteInfo, false, userId, userInfo);
         
         await wsRef.current.connectPresence(
@@ -520,6 +732,24 @@ export default function EmbedPage() {
       if (wsRef.current && wsRef.current.isConnected() && initResult.conversation_id) {
         console.log('[Widget] Switching to conversation room:', initResult.conversation_id);
         wsRef.current.switchToConversationRoom(initResult.conversation_id);
+        
+        // Load message history after switching to conversation room
+        try {
+          const history = await apiRef.current.getConversationMessages(initResult.conversation_id);
+          if (history && history.length > 0) {
+            console.log('[Widget] Loaded', history.length, 'messages from history');
+            const historyMessages: Message[] = history.map((msg: any) => ({
+              id: msg.id,
+              text: msg.message_text || msg.text,
+              sender: (msg.sender_type === 'user' ? 'user' : (msg.sender_type === 'agent' ? 'agent' : 'bot')) as 'user' | 'bot' | 'agent' | 'system',
+              timestamp: msg.created_at || msg.timestamp,
+              deliveryStatus: 'delivered' as const
+            }));
+            setMessages(historyMessages);
+          }
+        } catch (error) {
+          console.warn('[Widget] Failed to load message history:', error);
+        }
       }
       
       setIsLoading(false);
@@ -527,313 +757,6 @@ export default function EmbedPage() {
       console.error('[Widget] Failed to initialize conversation:', error);
       setWsError(error instanceof Error ? error.message : 'Failed to initialize conversation');
       setIsLoading(false);
-    }
-  };
-
-  // Initialize WebSocket only when needed (lazy initialization)
-  const initializeWebSocket = async () => {
-    if (isInitialized) {
-      return; // Already initialized
-    }
-    
-    setIsLoading(true);
-    setIsInitialized(true);
-    
-    try {
-      // Get website info and user info again (in case they changed)
-      const websiteInfo = getWebsiteInfo();
-      const { userId, userInfo } = getUserInfo();
-      const params = new URLSearchParams(window.location.search);
-      const tid = params.get('tenantId') || params.get('tenant');
-      
-      // Create a promise that resolves when WebSocket connects
-      let resolveConnect: (() => void) | null = null;
-      const connectPromise = new Promise<void>((resolve) => {
-        resolveConnect = resolve;
-      });
-      
-      // Check if WebSocket already exists (from presence initialization)
-      // If so, just update callbacks instead of creating a new instance
-      const messageCallbacks = {
-        onMessage: (message: any) => {
-          setMessages((prev) => {
-            // Debug: Log raw message received
-            console.log('[Widget] Raw message received in onMessage:', {
-              hasText: !!message.text,
-              hasMessageText: !!message.message_text,
-              text: message.text,
-              message_text: message.message_text,
-              id: message.id,
-              message_id: message.message_id,
-              messageId: message.messageId,
-              sender_type: message.sender_type,
-              sender: message.sender,
-              allKeys: Object.keys(message)
-            });
-            
-            // Normalize message format - ensure sender type is consistent
-            // Handle different server formats (sender_type, sender, etc.)
-            let normalizedMessage = { ...message };
-            
-            // Map messageId/message_id to id if present (server sends messageId or message_id, we expect id)
-            // Priority: message_id (from message:new) > messageId (from meta_message_created) > id
-            if (message.message_id && !normalizedMessage.id) {
-              normalizedMessage.id = message.message_id;
-            } else if (message.messageId && !normalizedMessage.id) {
-              normalizedMessage.id = message.messageId;
-            }
-            
-            // Map message_text to text if present (WebSocket sends message_text, we expect text)
-            if (message.message_text && !normalizedMessage.text) {
-              normalizedMessage.text = message.message_text;
-            } else if (!normalizedMessage.text && message.text) {
-              normalizedMessage.text = message.text;
-            }
-            
-            // Debug: Log normalized message
-            console.log('[Widget] Normalized message:', {
-              text: normalizedMessage.text,
-              id: normalizedMessage.id,
-              sender: normalizedMessage.sender,
-              timestamp: normalizedMessage.timestamp
-            });
-            
-            // Priority: sender_type > sender > default
-            if (message.sender_type) {
-              normalizedMessage.sender = message.sender_type === 'user' ? 'user' : (message.sender_type === 'agent' ? 'agent' : 'bot');
-            } else if (message.sender) {
-              // If sender is a UUID (user ID), infer it's a user message
-              const senderStr = String(message.sender);
-              if (senderStr.match(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i)) {
-                normalizedMessage.sender = 'user';
-              } else if (['user', 'bot', 'agent', 'system'].includes(senderStr)) {
-                normalizedMessage.sender = senderStr as 'user' | 'bot' | 'agent' | 'system';
-              } else {
-                normalizedMessage.sender = message.sender;
-              }
-            }
-            
-            // Ensure sender is one of the valid types
-            if (!normalizedMessage.sender || !['user', 'bot', 'agent', 'system'].includes(normalizedMessage.sender)) {
-              // Try to infer from other fields
-              if ((message as any).userId || (message as any).user_id || (message as any).visitor_id || (message as any).sender) {
-                // If sender is a UUID or we have user identifiers, it's a user message
-                const senderStr = String((message as any).sender || '');
-                if (senderStr.match(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i)) {
-                  normalizedMessage.sender = 'user';
-                } else {
-                  normalizedMessage.sender = 'user'; // Likely a user message if it has userId
-                }
-              } else {
-                normalizedMessage.sender = 'bot'; // Default to bot if unknown
-              }
-            }
-            
-            // Store original sender_type for matching
-            if (message.sender_type && !normalizedMessage.sender_type) {
-              (normalizedMessage as any).sender_type = message.sender_type;
-            }
-            
-            // STEP 1: Check if message with same ID already exists (simple deduplication by ID)
-            // Also check message_id field (message:new events use message_id as the actual message ID)
-            // message:new events have: id (event ID), message_id (actual message ID)
-            // meta_message_created events have: messageId (actual message ID)
-            const messageId = normalizedMessage.id || (message as any).messageId || (message as any).message_id;
-            console.log('[Widget] STEP 1 - Checking for duplicate by ID:', {
-              messageId,
-              normalizedId: normalizedMessage.id,
-              message_messageId: (message as any).messageId,
-              message_message_id: (message as any).message_id,
-              existingMessageIds: prev.map(m => m.id)
-            });
-            
-            if (messageId) {
-              const existingById = prev.find((m) => {
-                // Check if any existing message has the same ID
-                if (m.id === messageId) return true;
-                // Check if existing message has message_id that matches
-                if ((m as any).message_id === messageId) return true;
-                // Check if new message has message_id that matches existing message id
-                if ((message as any).message_id && m.id === (message as any).message_id) return true;
-                return false;
-              });
-              if (existingById) {
-                // Message with this ID already exists - just update it (don't add duplicate)
-                console.log('[Widget] STEP 1 - Message with ID already exists, skipping duplicate:', messageId);
-                return prev; // Don't add duplicate, just return existing messages
-              } else {
-                console.log('[Widget] STEP 1 - No duplicate found by ID, proceeding to STEP 2');
-              }
-            } else {
-              console.log('[Widget] STEP 1 - No message ID found, proceeding to STEP 2');
-            }
-
-            // STEP 2: If message has a real ID (not temp) and we have a pending message with same text
-            // This handles the case: optimistic message (temp ID) → server echo (real ID)
-            if (normalizedMessage.id && 
-                normalizedMessage.id.startsWith('temp-') === false && 
-                normalizedMessage.text) {
-              const messageTime = new Date(normalizedMessage.timestamp || Date.now()).getTime();
-              
-              // Debug: Log what we're looking for
-              console.log('[Widget] Looking for pending message to replace:', {
-                text: normalizedMessage.text,
-                sender: normalizedMessage.sender,
-                id: normalizedMessage.id,
-                timestamp: normalizedMessage.timestamp,
-                pendingMessages: prev.filter(m => m.deliveryStatus === 'pending').map(m => ({
-                  text: m.text,
-                  sender: m.sender,
-                  id: m.id,
-                  timestamp: m.timestamp
-                }))
-              });
-              
-              // Find pending message with same text (the optimistic one we added)
-              // Also match by sender to ensure we're replacing the right message
-              const pendingMessage = prev.find(
-                (m) => 
-                  m.text === normalizedMessage.text && 
-                  m.deliveryStatus === 'pending' &&
-                  m.sender === normalizedMessage.sender &&
-                  // Match within last 60 seconds
-                  Math.abs(new Date(m.timestamp).getTime() - messageTime) < 60000
-              );
-              
-              if (pendingMessage) {
-                // Replace the pending message with the real one from server
-                console.log('[Widget] ✅ Replacing pending message with server message:', normalizedMessage.text, 'ID:', normalizedMessage.id);
-                return prev.map((m) => 
-                  m.id === pendingMessage.id
-                    ? { 
-                        ...normalizedMessage,
-                        sender: m.sender || normalizedMessage.sender, // Preserve original sender
-                        deliveryStatus: 'delivered' as const,
-                        timestamp: m.timestamp // Keep original timestamp
-                      }
-                    : m
-                );
-              } else {
-                console.log('[Widget] ❌ No pending message found to replace. Check:', {
-                  hasText: !!normalizedMessage.text,
-                  textValue: normalizedMessage.text,
-                  hasId: !!normalizedMessage.id,
-                  idValue: normalizedMessage.id,
-                  isTemp: normalizedMessage.id?.startsWith('temp-'),
-                  pendingCount: prev.filter(m => m.deliveryStatus === 'pending').length
-                });
-              }
-            } else {
-              console.log('[Widget] ⚠️ Cannot match pending message - missing requirements:', {
-                hasId: !!normalizedMessage.id,
-                id: normalizedMessage.id,
-                isTemp: normalizedMessage.id?.startsWith('temp-'),
-                hasText: !!normalizedMessage.text,
-                text: normalizedMessage.text
-              });
-            }
-
-            // STEP 3: Check for duplicates by text and sender (within 10 seconds)
-            // BUT: Skip this check if message has a real ID (not temp) - it should replace pending or be new
-            // This catches duplicates that don't have IDs or are from other sources
-            if (normalizedMessage.text && 
-                (!normalizedMessage.id || normalizedMessage.id.startsWith('temp-'))) {
-              const messageTime = new Date(normalizedMessage.timestamp || Date.now()).getTime();
-              const duplicate = prev.find(
-                (m) => 
-                  m.text === normalizedMessage.text &&
-                  m.sender === normalizedMessage.sender &&
-                  // Don't match pending messages - those should be replaced by STEP 2
-                  m.deliveryStatus !== 'pending' &&
-                  Math.abs(new Date(m.timestamp).getTime() - messageTime) < 10000
-              );
-              
-              if (duplicate) {
-                // Duplicate found - skip adding it
-                console.log('[Widget] Duplicate message detected by text, skipping:', normalizedMessage.text);
-                return prev;
-              }
-            }
-
-            // New message from server (agent/bot response or unmatched user message)
-            return [...prev, { ...normalizedMessage, deliveryStatus: 'delivered' as const }];
-          });
-        },
-        onConnect: () => {
-          console.log('[Widget] WebSocket connected successfully');
-          setIsConnected(true);
-          setIsLoading(false);
-          setWsError(null);
-          
-          // Resolve the connection promise
-          if (resolveConnect) {
-            resolveConnect();
-          }
-          
-          // Load conversation history after connection
-          loadConversationHistory();
-        },
-        onDisconnect: () => {
-          setIsConnected(false);
-        },
-        onError: (error: any) => {
-          console.error('WebSocket error:', error);
-          setWsError(error.message || 'WebSocket connection failed');
-          setIsLoading(false);
-          setIsConnected(false);
-        },
-      };
-      
-      // Check if WebSocket already exists from presence initialization
-      if (wsRef.current) {
-        console.log('[Widget] WebSocket exists, updating callbacks');
-        wsRef.current.updateCallbacks(messageCallbacks);
-      } else {
-        // Create new WebSocket client
-        console.log('[Widget] Creating new WebSocket client');
-        wsRef.current = new ChatWebSocketNative(tid, messageCallbacks, websiteInfo, false, userId, userInfo);
-      }
-
-      // Step 1: Initialize conversation and get JWT token
-      // Get stored visitorId to continue existing conversation (if not expired)
-      const storedVisitorId = getVisitorId();
-      console.log('[Widget] Initializing conversation...', storedVisitorId ? `(continuing with visitorId: ${storedVisitorId})` : '(new conversation)');
-      const initResult = await wsRef.current.initialize(storedVisitorId || undefined);
-      
-      if (!initResult) {
-        throw new Error('Failed to initialize conversation');
-      }
-
-      // Check if conversation was closed
-      if (initResult.closed_at) {
-        console.log('[Widget] Previous conversation was closed, notifying user');
-        addSystemMessage('The previous conversation has been closed. Starting a new conversation.');
-      }
-
-      // Step 2: Connect WebSocket with JWT token
-      console.log('[Widget] Connecting WebSocket...');
-      wsRef.current.connect();
-      
-      // Wait for connection to be established (with timeout)
-      try {
-        await Promise.race([
-          connectPromise,
-          new Promise((_, reject) => 
-            setTimeout(() => reject(new Error('WebSocket connection timeout')), 10000)
-          )
-        ]);
-        console.log('[Widget] WebSocket connection established and ready');
-      } catch (error) {
-        console.warn('[Widget] WebSocket connection timeout or error:', error);
-        // Don't throw - allow fallback to HTTP API
-        // Connection might still succeed later, just not immediately
-      }
-    } catch (error) {
-      console.error('[Widget] Failed to initialize WebSocket:', error);
-      setWsError(error instanceof Error ? error.message : 'WebSocket initialization failed');
-      setIsLoading(false);
-      setIsConnected(false);
-      setIsInitialized(false); // Allow retry
     }
   };
 
