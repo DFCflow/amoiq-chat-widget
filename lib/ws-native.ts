@@ -78,6 +78,8 @@ export class ChatWebSocketNative {
   private gatewayUrl: string;
   private presenceSessionId?: string; // Session ID from presence layer
   private currentRoom?: string; // Current WebSocket room (session:{session_id} or conversation:{conversation_id})
+  private processedMessageKeys = new Map<string, number>(); // messageKey -> timestamp for deduplication
+  private readonly MESSAGE_CACHE_TTL = 60000; // 60 seconds - covers backend processing delays
 
   constructor(
     tenantId: string | null,
@@ -329,6 +331,17 @@ export class ChatWebSocketNative {
       }
       
       const rawMessage = data.message || data;
+      
+      // Check for duplicate BEFORE transforming/handling
+      const messageKey = this.getMessageKey(rawMessage);
+      if (this.hasProcessedMessage(messageKey)) {
+        console.log('[Socket.IO] Skipping duplicate meta_message_created in session room:', messageKey);
+        return;
+      }
+      
+      // Mark as processed BEFORE transforming/handling
+      this.markMessageProcessed(messageKey);
+      
       // Transform to ensure message_text -> text conversion
       const message = this.transformMessageNewToMessage(rawMessage);
       
@@ -366,6 +379,17 @@ export class ChatWebSocketNative {
       }
       
       const rawMessage = data.message || data;
+      
+      // Check for duplicate BEFORE transforming/handling
+      const messageKey = this.getMessageKey(rawMessage);
+      if (this.hasProcessedMessage(messageKey)) {
+        console.log('[Socket.IO] Skipping duplicate message:new in session room:', messageKey);
+        return;
+      }
+      
+      // Mark as processed BEFORE transforming/handling
+      this.markMessageProcessed(messageKey);
+      
       const message = this.transformMessageNewToMessage(rawMessage);
       
       // Extract conversation_id from transformed message
@@ -466,6 +490,17 @@ export class ChatWebSocketNative {
       console.log('[Socket.IO] ✅ meta_message_created event received:', data);
       // WebSocket payload format: { message: { text: string, ... } } or direct message object
       const rawMessage = data.message || data;
+      
+      // Check for duplicate BEFORE transforming/handling
+      const messageKey = this.getMessageKey(rawMessage);
+      if (this.hasProcessedMessage(messageKey)) {
+        console.log('[Socket.IO] Skipping duplicate meta_message_created:', messageKey);
+        return;
+      }
+      
+      // Mark as processed BEFORE transforming/handling
+      this.markMessageProcessed(messageKey);
+      
       // Transform to ensure message_text -> text conversion
       const message = this.transformMessageNewToMessage(rawMessage);
       
@@ -482,6 +517,17 @@ export class ChatWebSocketNative {
       console.log('[Socket.IO] ✅ message:new event received:', data);
       // WebSocket payload format: { message: { text: string, messageId: string, ... } }
       const rawMessage = data.message || data;
+      
+      // Check for duplicate BEFORE transforming/handling
+      const messageKey = this.getMessageKey(rawMessage);
+      if (this.hasProcessedMessage(messageKey)) {
+        console.log('[Socket.IO] Skipping duplicate message:new:', messageKey);
+        return;
+      }
+      
+      // Mark as processed BEFORE transforming/handling
+      this.markMessageProcessed(messageKey);
+      
       const message = this.transformMessageNewToMessage(rawMessage);
       
       // Filter: only process if message belongs to current conversation (if we have one)
@@ -872,7 +918,19 @@ export class ChatWebSocketNative {
           is_array: Array.isArray(data),
         });
         // Extract message from data.message or use data directly
-        const message = data.message || data;
+        const rawMessage = data.message || data;
+        
+        // Check for duplicate BEFORE transforming/handling
+        const messageKey = this.getMessageKey(rawMessage);
+        if (this.hasProcessedMessage(messageKey)) {
+          console.log('[Socket.IO] Skipping duplicate meta_message_created in connect():', messageKey);
+          return;
+        }
+        
+        // Mark as processed BEFORE transforming/handling
+        this.markMessageProcessed(messageKey);
+        
+        const message = rawMessage;
         console.log('[Socket.IO] DEBUG - Extracted message:', message);
         console.log('[Socket.IO] DEBUG - Calling handleMessage with:', message);
         this.handleMessage(message);
@@ -890,6 +948,17 @@ export class ChatWebSocketNative {
         });
         // Extract message from data.message or use data directly (same as meta_message_created)
         const rawMessage = data.message || data;
+        
+        // Check for duplicate BEFORE transforming/handling
+        const messageKey = this.getMessageKey(rawMessage);
+        if (this.hasProcessedMessage(messageKey)) {
+          console.log('[Socket.IO] Skipping duplicate message:new in connect():', messageKey);
+          return;
+        }
+        
+        // Mark as processed BEFORE transforming/handling
+        this.markMessageProcessed(messageKey);
+        
         // Transform message:new format to expected message format
         const message = this.transformMessageNewToMessage(rawMessage);
         console.log('[Socket.IO] DEBUG - Transformed message:', message);
@@ -1315,6 +1384,55 @@ export class ChatWebSocketNative {
         }
       }
     }, refreshInMs);
+  }
+
+  /**
+   * Generate unique key for message deduplication
+   * Uses content-based key since IDs won't match between message:new and meta_message_created
+   * message:new broadcasts BEFORE DB write (no message_id), meta_message_created broadcasts AFTER (with message_id)
+   */
+  private getMessageKey(data: any): string {
+    // Use content-based key: conversation_id + sender_type + text
+    // This works because IDs will never match between the two events
+    const text = data.text || data.message_text;
+    const sender = data.sender_type || data.sender;
+    const conversationId = data.conversation_id;
+    
+    // Normalize sender to match backend values: 'human', 'ai', 'user'
+    const normalizedSender = sender === 'agent' ? 'human' : (sender === 'bot' ? 'ai' : sender);
+    
+    return `${conversationId}:${normalizedSender}:${text}`;
+  }
+
+  /**
+   * Check if message has already been processed
+   */
+  private hasProcessedMessage(messageKey: string): boolean {
+    const timestamp = this.processedMessageKeys.get(messageKey);
+    if (!timestamp) return false;
+    
+    // Check if still within TTL
+    return (Date.now() - timestamp) < this.MESSAGE_CACHE_TTL;
+  }
+
+  /**
+   * Mark message as processed
+   */
+  private markMessageProcessed(messageKey: string): void {
+    this.processedMessageKeys.set(messageKey, Date.now());
+    this.cleanMessageCache();
+  }
+
+  /**
+   * Clean up expired entries from message cache
+   */
+  private cleanMessageCache(): void {
+    const now = Date.now();
+    for (const [key, timestamp] of this.processedMessageKeys.entries()) {
+      if (now - timestamp > this.MESSAGE_CACHE_TTL) {
+        this.processedMessageKeys.delete(key);
+      }
+    }
   }
 
   /**

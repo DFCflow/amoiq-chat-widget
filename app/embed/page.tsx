@@ -404,9 +404,29 @@ export default function EmbedPage() {
             if (m.text !== normalizedMessage.text || m.sender !== normalizedMessage.sender) {
               return false;
             }
-            // Match within last 10 seconds (messages arrive quickly via message:new, then worker processes and sends meta_message_created)
+            // Match within last 60 seconds (messages can arrive with delays due to backend processing, network latency, worker queue)
+            // Increased from 10 seconds to handle cases where message:new and meta_message_created arrive >10 seconds apart
             const timeDiff = Math.abs(new Date(m.timestamp).getTime() - messageTime);
-            return timeDiff < 10000;
+            const isWithinWindow = timeDiff < 60000;
+            
+            // Detailed logging for debugging
+            console.log('[Widget] STEP 1.5 - Checking duplicate candidate:', {
+              candidateText: m.text,
+              candidateSender: m.sender,
+              candidateTimestamp: m.timestamp,
+              candidateId: m.id,
+              newText: normalizedMessage.text,
+              newSender: normalizedMessage.sender,
+              newTimestamp: normalizedMessage.timestamp,
+              newId: messageId,
+              textMatch: m.text === normalizedMessage.text,
+              senderMatch: m.sender === normalizedMessage.sender,
+              timeDiff: timeDiff,
+              timeDiffSeconds: (timeDiff / 1000).toFixed(2),
+              withinWindow: isWithinWindow
+            });
+            
+            return isWithinWindow;
           });
           
           if (duplicateByContent) {
@@ -415,7 +435,8 @@ export default function EmbedPage() {
               sender: normalizedMessage.sender,
               sender_type: (normalizedMessage as any).sender_type,
               existingId: duplicateByContent.id,
-              newId: messageId
+              newId: messageId,
+              timeDiff: Math.abs(new Date(duplicateByContent.timestamp).getTime() - messageTime)
             });
             return prev; // Skip duplicate
           }
