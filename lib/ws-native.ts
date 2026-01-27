@@ -363,6 +363,10 @@ export class ChatWebSocketNative {
       return;
     }
 
+    // Set up message event listeners BEFORE joining conversation room
+    // This ensures we catch messages immediately when we join
+    this.setupMessageEventListeners();
+
     // Leave session room if we're in it
     if (this.currentRoom && this.currentRoom.startsWith('session:')) {
       console.log('[Socket.IO] Leaving session room:', this.currentRoom);
@@ -374,9 +378,6 @@ export class ChatWebSocketNative {
     console.log('[Socket.IO] Joining conversation room:', roomName);
     this.socket.emit('join:conversation', { conversationId });
     this.currentRoom = roomName;
-
-    // Set up message event listeners when joining conversation room
-    this.setupMessageEventListeners();
 
     // Listen for joined confirmation
     this.socket.once('joined', (data: { conversation_id: string; room: string }) => {
@@ -393,30 +394,60 @@ export class ChatWebSocketNative {
   private setupMessageEventListeners(): void {
     if (!this.socket) return;
 
-    // Remove existing listeners to avoid duplicates
-    this.socket.off('meta_message_created');
-    this.socket.off('message:new');
-    this.socket.off('message');
+    // Check if conversation room listeners are already set up
+    // We use a flag to track if we've set up conversation-specific listeners
+    // Session room listeners will continue to work, but we add conversation room listeners
+    // that filter by conversation_id
+    
+    // Remove only conversation room listeners if they exist (not session room listeners)
+    // We'll use a different approach: check if we're already in a conversation room
+    const isInConversationRoom = this.currentRoom?.startsWith('conversation:');
+    
+    // Only remove listeners if we're switching from one conversation to another
+    // Keep session room listeners active (they handle messages before room switch)
+    if (isInConversationRoom) {
+      // We're switching conversations, remove old conversation listeners
+      // But keep session room listeners
+      this.socket.off('meta_message_created');
+      this.socket.off('message:new');
+      this.socket.off('message');
+    }
 
-    // Handle meta_message_created events (from backend when messages are saved to DB)
+    // Set up conversation room message listeners
+    // These will work in both session and conversation rooms (Socket.IO delivers to all listeners)
+    // But we filter by conversation_id to only process relevant messages
     this.socket.on('meta_message_created', (data: any) => {
       console.log('[Socket.IO] ✅ meta_message_created event received:', data);
       const message = data.message || data;
-      this.handleMessage(message);
+      
+      // Filter: only process if message belongs to current conversation (if we have one)
+      // Or if we don't have conversationId yet, process it (will be handled by session room listener)
+      if (!this.conversationId || !message.conversation_id || message.conversation_id === this.conversationId) {
+        this.handleMessage(message);
+      } else {
+        console.log('[Socket.IO] Ignoring meta_message_created for different conversation:', message.conversation_id);
+      }
     });
 
-    // Handle message:new events (alternative event name used by server)
     this.socket.on('message:new', (data: any) => {
       console.log('[Socket.IO] ✅ message:new event received:', data);
       const rawMessage = data.message || data;
       const message = this.transformMessageNewToMessage(rawMessage);
-      this.handleMessage(message);
+      
+      // Filter: only process if message belongs to current conversation (if we have one)
+      if (!this.conversationId || !message.conversation_id || message.conversation_id === this.conversationId) {
+        this.handleMessage(message);
+      } else {
+        console.log('[Socket.IO] Ignoring message:new for different conversation:', message.conversation_id);
+      }
     });
 
-    // Handle generic message events
     this.socket.on('message', (data: any) => {
       console.log('[Socket.IO] Message received:', data);
-      this.handleMessage(data);
+      // Generic message events - process if no conversation_id or matches current
+      if (!this.conversationId || !data.conversation_id || data.conversation_id === this.conversationId) {
+        this.handleMessage(data);
+      }
     });
   }
 
