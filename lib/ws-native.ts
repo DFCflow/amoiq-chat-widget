@@ -1004,6 +1004,22 @@ export class ChatWebSocketNative {
     // We should use message_id as the primary ID for deduplication
     // Preserve all original fields first
     // WebSocket payload format: { message: { text: string, sender: string, messageId: string, ... } }
+    
+    // Debug: Log what we're transforming
+    console.log('[Socket.IO] Transform input:', {
+      hasText: !!data.text,
+      hasMessageText: !!data.message_text,
+      hasMessage: !!data.message,
+      text: data.text,
+      message_text: data.message_text,
+      message: data.message,
+      id: data.id,
+      message_id: data.message_id,
+      messageId: data.messageId,
+      sender_type: data.sender_type,
+      allKeys: Object.keys(data)
+    });
+    
     const transformed = {
       ...data,
       // Override with normalized fields (these take precedence)
@@ -1019,6 +1035,15 @@ export class ChatWebSocketNative {
       attachments: data.attachments,
       metadata: data.metadata,
     };
+    
+    // Debug: Log transformation result
+    console.log('[Socket.IO] Transform output:', {
+      text: transformed.text,
+      id: transformed.id,
+      sender: transformed.sender,
+      timestamp: transformed.timestamp,
+      hasText: !!transformed.text
+    });
     
     // If sender is a UUID (user ID), we'll let the normalization in embed/page.tsx handle it
     // But ensure we have the original sender field preserved
