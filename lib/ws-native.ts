@@ -311,7 +311,9 @@ export class ChatWebSocketNative {
         return;
       }
       
-      const message = data.message || data;
+      const rawMessage = data.message || data;
+      // Transform to ensure message_text -> text conversion
+      const message = this.transformMessageNewToMessage(rawMessage);
       
       // Extract conversation_id from message
       const messageConversationId = message.conversation_id;
@@ -438,8 +440,10 @@ export class ChatWebSocketNative {
     // But we filter by conversation_id to only process relevant messages
     this.socket.on('meta_message_created', (data: any) => {
       console.log('[Socket.IO] ✅ meta_message_created event received:', data);
-      // WebSocket payload format: { message: { text: string, ... } }
-      const message = data.message || data;
+      // WebSocket payload format: { message: { text: string, ... } } or direct message object
+      const rawMessage = data.message || data;
+      // Transform to ensure message_text -> text conversion
+      const message = this.transformMessageNewToMessage(rawMessage);
       
       // Filter: only process if message belongs to current conversation (if we have one)
       // Or if we don't have conversationId yet, process it (will be handled by session room listener)

@@ -47,6 +47,26 @@ function saveMessagesToStorage(messages: Message[], lastUserMessageAt?: number):
   }
 }
 
+// Check if 5 minutes have passed since last user message
+function shouldShowClearButton(): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    const stored = localStorage.getItem(MESSAGES_STORAGE_KEY);
+    if (!stored) return false;
+    
+    const data = JSON.parse(stored);
+    if (data && data.lastUserMessageAt) {
+      const timeSinceLastUserMessage = Date.now() - data.lastUserMessageAt;
+      const fiveMinutes = 5 * 60 * 1000; // 5 minutes
+      return timeSinceLastUserMessage >= fiveMinutes;
+    }
+    return false;
+  } catch (error) {
+    console.warn('[Widget] Failed to check clear button status:', error);
+    return false;
+  }
+}
+
 // Load messages from localStorage
 function loadMessagesFromStorage(): Message[] {
   if (typeof window === 'undefined') return [];
@@ -64,19 +84,6 @@ function loadMessagesFromStorage(): Message[] {
         // Messages too old, clear them
         localStorage.removeItem(MESSAGES_STORAGE_KEY);
         return [];
-      }
-      
-      // Check if 5 minutes have passed since last user message
-      if (data.lastUserMessageAt) {
-        const timeSinceLastUserMessage = Date.now() - data.lastUserMessageAt;
-        const fiveMinutes = 5 * 60 * 1000; // 5 minutes
-        
-        if (timeSinceLastUserMessage >= fiveMinutes) {
-          // 5 minutes passed since last user message, clear messages
-          console.log('[Widget] 5 minutes passed since last user message, clearing chat history');
-          localStorage.removeItem(MESSAGES_STORAGE_KEY);
-          return [];
-        }
       }
       
       return data.messages;
@@ -111,6 +118,7 @@ export default function EmbedPage() {
   const [senderName, setSenderNameState] = useState<string | null>(null);
   const [conversationClosed, setConversationClosed] = useState(false);
   const [nameInputValue, setNameInputValue] = useState('');
+  const [showClearButton, setShowClearButton] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const wsRef = useRef<ChatWebSocketNative | null>(null);
   const apiRef = useRef<ChatAPI | null>(null);
@@ -319,6 +327,8 @@ export default function EmbedPage() {
       if (cachedMessages.length > 0) {
         console.log(`[Widget] Loaded ${cachedMessages.length} messages from cache`);
         setMessages(cachedMessages);
+        // Check if clear button should be shown
+        setShowClearButton(shouldShowClearButton());
       }
     }
     
@@ -557,6 +567,13 @@ export default function EmbedPage() {
               normalizedMessage.id = message.message_id;
             } else if (message.messageId && !normalizedMessage.id) {
               normalizedMessage.id = message.messageId;
+            }
+            
+            // Map message_text to text if present (WebSocket sends message_text, we expect text)
+            if (message.message_text && !normalizedMessage.text) {
+              normalizedMessage.text = message.message_text;
+            } else if (!normalizedMessage.text && message.text) {
+              normalizedMessage.text = message.text;
             }
             
             // Priority: sender_type > sender > default
@@ -814,40 +831,21 @@ export default function EmbedPage() {
     }
   }, [messages]);
 
-  // Periodic check to clear messages after 5 minutes of inactivity
+  // Periodic check to show clear button after 5 minutes of inactivity
   useEffect(() => {
-    const checkAndClearMessages = () => {
-      if (typeof window === 'undefined') return;
-      
-      try {
-        const stored = localStorage.getItem(MESSAGES_STORAGE_KEY);
-        if (!stored) return;
-        
-        const data = JSON.parse(stored);
-        if (data && data.lastUserMessageAt) {
-          const timeSinceLastUserMessage = Date.now() - data.lastUserMessageAt;
-          const fiveMinutes = 5 * 60 * 1000; // 5 minutes
-          
-          if (timeSinceLastUserMessage >= fiveMinutes) {
-            // 5 minutes passed since last user message, clear messages
-            console.log('[Widget] 5 minutes passed since last user message, clearing chat history');
-            localStorage.removeItem(MESSAGES_STORAGE_KEY);
-            setMessages([]);
-          }
-        }
-      } catch (error) {
-        console.warn('[Widget] Failed to check message timeout:', error);
-      }
+    const checkClearButton = () => {
+      const shouldShow = shouldShowClearButton();
+      setShowClearButton(shouldShow);
     };
 
     // Check immediately
-    checkAndClearMessages();
+    checkClearButton();
     
     // Then check every minute
-    const interval = setInterval(checkAndClearMessages, 60 * 1000);
+    const interval = setInterval(checkClearButton, 60 * 1000);
     
     return () => clearInterval(interval);
-  }, []);
+  }, [messages]);
 
   const handleSend = async () => {
     if (!inputValue.trim()) return;
@@ -890,6 +888,8 @@ export default function EmbedPage() {
       const updated = [...prev, userMessage];
       // Save immediately with the new last user message timestamp
       saveMessagesToStorage(updated, Date.now());
+      // Hide clear button when user sends a new message
+      setShowClearButton(false);
       return updated;
     });
 
@@ -959,6 +959,12 @@ export default function EmbedPage() {
     }
   };
 
+  const handleClearHistory = () => {
+    clearMessagesFromStorage();
+    setMessages([]);
+    setShowClearButton(false);
+  };
+
   if (isLoading) {
     return (
       <div className={styles.container}>
@@ -974,6 +980,16 @@ export default function EmbedPage() {
     <div className={styles.container}>
       <div className={styles.header}>
         <h3 className={styles.title}>Chat Support</h3>
+        {showClearButton && messages.length > 0 && (
+          <button 
+            className={styles.clearButton} 
+            onClick={handleClearHistory} 
+            aria-label="Clear chat history"
+            title="Clear chat history"
+          >
+            Clear History
+          </button>
+        )}
         <button className={styles.closeButton} onClick={handleClose} aria-label="Close">
           ×
         </button>
