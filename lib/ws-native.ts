@@ -304,6 +304,13 @@ export class ChatWebSocketNative {
     // This handles race condition where backend broadcasts to both rooms simultaneously
     this.socket.on('meta_message_created', (data: any) => {
       console.log('[Socket.IO] ✅ meta_message_created event received in session room:', data);
+      
+      // If we're already in conversation room, skip - let conversation room listener handle it
+      if (this.currentRoom?.startsWith('conversation:')) {
+        console.log('[Socket.IO] Skipping meta_message_created in session room - already in conversation room');
+        return;
+      }
+      
       const message = data.message || data;
       
       // Extract conversation_id from message
@@ -316,10 +323,13 @@ export class ChatWebSocketNative {
           this.conversationId = messageConversationId;
           this.callbacks.onConversationCreated?.(messageConversationId);
           this.switchToConversationRoom(messageConversationId);
-        }
-        // Process message if it belongs to our conversation
-        if (messageConversationId === this.conversationId) {
+          // Process the message after switching
           this.handleMessage(message);
+        } else {
+          // We have conversationId but not in conversation room yet - process it
+          if (messageConversationId === this.conversationId) {
+            this.handleMessage(message);
+          }
         }
       } else {
         // No conversation_id in message, process anyway (might be for our session)
@@ -329,6 +339,13 @@ export class ChatWebSocketNative {
 
     this.socket.on('message:new', (data: any) => {
       console.log('[Socket.IO] ✅ message:new event received in session room:', data);
+      
+      // If we're already in conversation room, skip - let conversation room listener handle it
+      if (this.currentRoom?.startsWith('conversation:')) {
+        console.log('[Socket.IO] Skipping message:new in session room - already in conversation room');
+        return;
+      }
+      
       const rawMessage = data.message || data;
       const message = this.transformMessageNewToMessage(rawMessage);
       
@@ -342,10 +359,13 @@ export class ChatWebSocketNative {
           this.conversationId = messageConversationId;
           this.callbacks.onConversationCreated?.(messageConversationId);
           this.switchToConversationRoom(messageConversationId);
-        }
-        // Process message if it belongs to our conversation
-        if (messageConversationId === this.conversationId) {
+          // Process the message after switching
           this.handleMessage(message);
+        } else {
+          // We have conversationId but not in conversation room yet - process it
+          if (messageConversationId === this.conversationId) {
+            this.handleMessage(message);
+          }
         }
       } else {
         // No conversation_id in message, process anyway (might be for our session)
@@ -418,6 +438,7 @@ export class ChatWebSocketNative {
     // But we filter by conversation_id to only process relevant messages
     this.socket.on('meta_message_created', (data: any) => {
       console.log('[Socket.IO] ✅ meta_message_created event received:', data);
+      // WebSocket payload format: { message: { text: string, ... } }
       const message = data.message || data;
       
       // Filter: only process if message belongs to current conversation (if we have one)
@@ -431,6 +452,7 @@ export class ChatWebSocketNative {
 
     this.socket.on('message:new', (data: any) => {
       console.log('[Socket.IO] ✅ message:new event received:', data);
+      // WebSocket payload format: { message: { text: string, messageId: string, ... } }
       const rawMessage = data.message || data;
       const message = this.transformMessageNewToMessage(rawMessage);
       
@@ -977,15 +999,16 @@ export class ChatWebSocketNative {
     // IMPORTANT: message:new events have message_id (actual message ID) and id (event ID)
     // We should use message_id as the primary ID for deduplication
     // Preserve all original fields first
+    // WebSocket payload format: { message: { text: string, sender: string, messageId: string, ... } }
     const transformed = {
       ...data,
       // Override with normalized fields (these take precedence)
       id: data.message_id || data.messageId || data.id,  // Use message_id first (actual message ID), then messageId, then id
-      text: data.message_text || data.text,
+      text: data.text || data.message_text || data.message,  // WebSocket uses "text" field directly
       sender: data.sender_type === 'user' ? 'user' : (data.sender_type === 'agent' ? 'agent' : (data.sender_type === 'human' ? 'agent' : 'bot')),
       senderId: data.sender_id || data.sender,  // Handle sender being a UUID
       senderName: data.sender_name,
-      timestamp: data.created_at || data.inserted_at || data.timestamp || new Date().toISOString(),
+      timestamp: data.timestamp || data.created_at || data.inserted_at || new Date().toISOString(),  // WebSocket uses "timestamp" directly
       conversation_id: data.conversation_id,
       tenant_id: data.tenant_id || data.tenantId,
       status: data.status,
