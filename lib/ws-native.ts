@@ -89,20 +89,11 @@ export class ChatWebSocketNative {
   ) {
     this.tenantId = tenantId || null;
     this.callbacks = callbacks;
-  }
-
-  /**
-   * Update callbacks after construction
-   * Useful when WebSocket is created in presence mode and later needs message callbacks
-   */
-  updateCallbacks(newCallbacks: WebSocketCallbacks): void {
-    this.callbacks = { ...this.callbacks, ...newCallbacks };
-    console.log('[Socket.IO] Callbacks updated:', {
-      hasOnMessage: !!this.callbacks.onMessage,
-      hasOnConnect: !!this.callbacks.onConnect,
-      hasOnDisconnect: !!this.callbacks.onDisconnect
-    });
+    this.isAdmin = isAdmin;
+    this.userId = userId;
+    this.userInfo = userInfo;
     
+    // Initialize website info
     // Use provided websiteInfo if it has domain/origin, otherwise try to get from URL params
     // Don't use fallback getWebsiteInfo() if we're on webchat domain (would return wrong domain)
     if (websiteInfo && (websiteInfo.domain || websiteInfo.origin)) {
@@ -141,6 +132,19 @@ export class ChatWebSocketNative {
     
     // Get Gateway URL for /webchat/init endpoint
     this.gatewayUrl = process.env.NEXT_PUBLIC_GATEWAY_URL || process.env.NEXT_PUBLIC_API_URL || 'https://api-gateway-dfcflow.fly.dev';
+  }
+
+  /**
+   * Update callbacks after construction
+   * Useful when WebSocket is created in presence mode and later needs message callbacks
+   */
+  updateCallbacks(newCallbacks: WebSocketCallbacks): void {
+    this.callbacks = { ...this.callbacks, ...newCallbacks };
+    console.log('[Socket.IO] Callbacks updated:', {
+      hasOnMessage: !!this.callbacks.onMessage,
+      hasOnConnect: !!this.callbacks.onConnect,
+      hasOnDisconnect: !!this.callbacks.onDisconnect
+    });
   }
 
   /**

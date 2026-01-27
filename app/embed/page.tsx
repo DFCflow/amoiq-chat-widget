@@ -555,7 +555,7 @@ export default function EmbedPage() {
       // Check if WebSocket already exists (from presence initialization)
       // If so, just update callbacks instead of creating a new instance
       const messageCallbacks = {
-        onMessage: (message) => {
+        onMessage: (message: any) => {
           setMessages((prev) => {
             // Debug: Log raw message received
             console.log('[Widget] Raw message received in onMessage:', {
@@ -776,7 +776,7 @@ export default function EmbedPage() {
         onDisconnect: () => {
           setIsConnected(false);
         },
-        onError: (error) => {
+        onError: (error: any) => {
           console.error('WebSocket error:', error);
           setWsError(error.message || 'WebSocket connection failed');
           setIsLoading(false);
