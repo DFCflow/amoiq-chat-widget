@@ -50,7 +50,20 @@
     `;
     
     // Create the four-pointed star/spark icon matching the Amo IQ logo
+    // Badge dot for new-message alert (hidden by default)
     bubble.innerHTML = `
+      <span id="amoiq-widget-badge" style="
+        position: absolute;
+        top: 4px;
+        right: 4px;
+        width: 14px;
+        height: 14px;
+        border-radius: 50%;
+        background: #EF4444;
+        border: 2px solid white;
+        display: none;
+        box-shadow: 0 1px 4px rgba(0,0,0,0.2);
+      " aria-label="New message"></span>
       <svg id="amoiq-widget-icon" width="28" height="28" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="transition: transform 0.3s ease; filter: drop-shadow(0 0 4px rgba(255, 255, 255, 0.5));">
         <!-- Four-pointed star/spark icon -->
         <path d="M12 2L13.5 8.5L20 10L13.5 11.5L12 18L10.5 11.5L4 10L10.5 8.5L12 2Z" fill="white" stroke="white" stroke-width="0.5"/>
@@ -130,12 +143,27 @@
 
     let isOpen = false;
 
+    function showNewMessageBadge() {
+      var badge = document.getElementById('amoiq-widget-badge');
+      if (badge && !isOpen) {
+        badge.style.display = 'block';
+      }
+    }
+
+    function hideNewMessageBadge() {
+      var badge = document.getElementById('amoiq-widget-badge');
+      if (badge) {
+        badge.style.display = 'none';
+      }
+    }
+
     // Toggle chat
     function toggleChat() {
       isOpen = !isOpen;
       if (isOpen) {
         iframe.style.display = 'block';
         bubble.style.display = 'none';
+        hideNewMessageBadge();
         iframe.focus();
         // Notify iframe that chat is now open (for WebSocket initialization)
         if (iframe.contentWindow) {
@@ -162,6 +190,10 @@
         if (isOpen) {
           toggleChat();
         }
+      }
+      // Show badge when new message arrives (admin/bot) while chat is closed
+      if (e.data && e.data.type === 'amoiq-widget-new-message') {
+        showNewMessageBadge();
       }
     });
   }

@@ -359,6 +359,15 @@ export default function EmbedPage() {
           (normalizedMessage as any).sender_type = message.sender_type;
         }
         
+        // Notify parent (bubble) of new incoming message so it can show alert dot
+        // Only for messages from agent/bot/system — not user's own messages
+        const isIncoming = normalizedMessage.sender === 'agent' || normalizedMessage.sender === 'bot' || normalizedMessage.sender === 'system';
+        if (isIncoming && typeof window !== 'undefined' && window.parent) {
+          try {
+            window.parent.postMessage({ type: 'amoiq-widget-new-message' }, '*');
+          } catch (_) { /* cross-origin safe */ }
+        }
+        
         // STEP 1: Check if message with same ID already exists (simple deduplication by ID)
         // Also check message_id field (message:new events use message_id as the actual message ID)
         // message:new events have: id (event ID), message_id (actual message ID)
