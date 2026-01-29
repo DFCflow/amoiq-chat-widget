@@ -91,7 +91,6 @@ export function getOrCreateSessionId(): string {
         return sessionId;
       } else {
         // Session expired - create new one
-        console.log('[Session] Session expired, creating new session');
       }
     }
 
@@ -102,7 +101,6 @@ export function getOrCreateSessionId(): string {
     localStorage.setItem(SESSION_ID_KEY, sessionId);
     localStorage.setItem(SESSION_CREATED_KEY, now.toString());
 
-    console.log('[Session] Created new session:', sessionId);
     return sessionId;
   } catch (error) {
     // localStorage might be disabled or full
@@ -125,7 +123,6 @@ export function getOrCreateFingerprint(): string {
     if (!fingerprint) {
       fingerprint = generateBrowserFingerprint();
       localStorage.setItem(FINGERPRINT_KEY, fingerprint);
-      console.log('[Session] Generated new fingerprint:', fingerprint);
     }
 
     return fingerprint;
@@ -175,7 +172,6 @@ export function clearSession(): void {
     localStorage.removeItem(SESSION_CREATED_KEY);
     clearConversation(); // Also clear conversation when session is cleared
     // Keep fingerprint - it's device-specific, not session-specific
-    console.log('[Session] Session cleared');
   } catch (error) {
     console.warn('[Session] Failed to clear session:', error);
   }
@@ -243,7 +239,6 @@ export function getConversationId(): string | null {
         return conversationId;
       } else {
         // Conversation expired - clear it
-        console.log('[Session] Conversation expired, clearing conversation data');
         clearConversation();
         return null;
       }
@@ -267,7 +262,6 @@ export function setConversationId(conversationId: string, visitorId?: string): v
     if (visitorId) {
       localStorage.setItem(VISITOR_ID_KEY, visitorId);
     }
-    console.log('[Session] Stored conversation ID:', conversationId);
   } catch (error) {
     console.warn('[Session] Failed to store conversation ID:', error);
   }
@@ -300,7 +294,6 @@ export function clearConversation(): void {
     localStorage.removeItem(CONVERSATION_ID_KEY);
     localStorage.removeItem(VISITOR_ID_KEY);
     localStorage.removeItem(CONVERSATION_CREATED_KEY);
-    console.log('[Session] Conversation cleared');
   } catch (error) {
     console.warn('[Session] Failed to clear conversation:', error);
   }
@@ -346,7 +339,6 @@ export function setSenderName(name: string): void {
   if (typeof window === 'undefined') return;
   try {
     localStorage.setItem(SENDER_NAME_KEY, name);
-    console.log('[Session] Stored sender name:', name);
   } catch (error) {
     console.warn('[Session] Failed to store sender name:', error);
   }
@@ -359,7 +351,6 @@ export function clearSenderName(): void {
   if (typeof window === 'undefined') return;
   try {
     localStorage.removeItem(SENDER_NAME_KEY);
-    console.log('[Session] Sender name cleared');
   } catch (error) {
     console.warn('[Session] Failed to clear sender name:', error);
   }

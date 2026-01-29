@@ -122,13 +122,11 @@ export function useOnlineUsers(
       try {
         wsRef.current = new ChatWebSocketNative(tenantId, {
           onConnect: () => {
-            console.log('[useOnlineUsers] WebSocket connected');
             setIsConnected(true);
             // Request initial list on connect
             wsRef.current?.requestOnlineUsers();
           },
           onDisconnect: () => {
-            console.log('[useOnlineUsers] WebSocket disconnected');
             setIsConnected(false);
           },
           onError: (err) => {
@@ -141,7 +139,6 @@ export function useOnlineUsers(
             }
           },
           onUserOnline: (user) => {
-            console.log('[useOnlineUsers] User came online:', user);
             setOnlineUsers((prev) => {
               // Check if user already exists
               const exists = prev.find((u) => u.userId === user.userId);
@@ -154,11 +151,9 @@ export function useOnlineUsers(
             });
           },
           onUserOffline: (userId) => {
-            console.log('[useOnlineUsers] User went offline:', userId);
             setOnlineUsers((prev) => prev.filter((u) => u.userId !== userId));
           },
           onOnlineUsersList: (users) => {
-            console.log('[useOnlineUsers] Received online users list:', users);
             setOnlineUsers(users);
             setIsLoading(false);
           },

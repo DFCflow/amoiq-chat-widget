@@ -89,7 +89,6 @@ export class ChatAPI {
           referrer: params?.get('referrer') || undefined,
           siteId: params?.get('siteId') || undefined,
         };
-        console.log('[ChatAPI] Using website info from URL params:', this.websiteInfo);
       } else {
         // Last resort: use provided websiteInfo even if empty, or getWebsiteInfo() if not on webchat domain
         const fallback = this.getWebsiteInfo();
@@ -328,13 +327,11 @@ export class ChatAPI {
             
             if (isClosedConversation && conversationId) {
               // Conversation is closed - clear stored conversation data
-              console.log('[ChatAPI] Conversation is closed, clearing stored conversation data');
               clearConversation();
               
               // Retry without conversation_id to create a new conversation
               if (attempt < maxRetries - 1) {
                 delete payload.conversation_id;
-                console.log('[ChatAPI] Retrying message without conversation_id to create new conversation');
                 const delay = Math.min(1000 * Math.pow(2, attempt), 5000);
                 await new Promise(resolve => setTimeout(resolve, delay));
                 // Mark that we're retrying due to closed conversation
@@ -357,7 +354,6 @@ export class ChatAPI {
           // Check if response indicates conversation is closed
           const wasClosed = data.closed_at || data.conversation_closed;
           if (wasClosed) {
-            console.log('[ChatAPI] Response indicates conversation is closed, clearing stored conversation data');
             clearConversation();
           }
           

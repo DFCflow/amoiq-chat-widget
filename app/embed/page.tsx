@@ -145,7 +145,6 @@ export default function EmbedPage() {
         referrer: referrer || undefined,
         siteId: siteId || undefined,
       };
-      console.log('[Widget] Using website info from URL params:', websiteInfo);
       return websiteInfo;
     }
 
@@ -165,12 +164,9 @@ export default function EmbedPage() {
             referrer: document.referrer,
             siteId: siteId || undefined,
           };
-          console.log('[Widget] Using website info from document.referrer:', websiteInfo);
           return websiteInfo;
         }
-      } catch (e) {
-        console.log('[Widget] Could not parse document.referrer:', e);
-      }
+      } catch (_e) {}
     }
 
     // Fallback 2: Try to get from parent window (if same-origin iframe)
@@ -187,12 +183,10 @@ export default function EmbedPage() {
             referrer: document.referrer || '',
             siteId: siteId || undefined,
           };
-          console.log('[Widget] Using website info from parent window:', websiteInfo);
           return websiteInfo;
         }
-      } catch (e) {
+      } catch (_e) {
         // Cross-origin iframe - can't access parent
-        console.log('[Widget] Cross-origin iframe, cannot access parent window');
       }
     }
 
@@ -215,7 +209,6 @@ export default function EmbedPage() {
         referrer: document.referrer || '',
         siteId: siteId || undefined,
       };
-      console.log('[Widget] Using website info from current window (fallback):', websiteInfo);
       return websiteInfo;
     }
 
@@ -270,20 +263,6 @@ export default function EmbedPage() {
   const createMessageHandler = () => {
     return (message: any) => {
       setMessages((prev) => {
-        // Debug: Log raw message received
-        console.log('[Widget] Raw message received in onMessage:', {
-          hasText: !!message.text,
-          hasMessageText: !!message.message_text,
-          text: message.text,
-          message_text: message.message_text,
-          id: message.id,
-          message_id: message.message_id,
-          messageId: message.messageId,
-          sender_type: message.sender_type,
-          sender: message.sender,
-          allKeys: Object.keys(message)
-        });
-        
         // Normalize message format - ensure sender type is consistent
         // Handle different server formats (sender_type, sender, etc.)
         let normalizedMessage = { ...message };
@@ -308,14 +287,6 @@ export default function EmbedPage() {
         if (tempIdFromServer) {
           (normalizedMessage as any).temp_id = tempIdFromServer;
         }
-        
-        // Debug: Log normalized message
-        console.log('[Widget] Normalized message:', {
-          text: normalizedMessage.text,
-          id: normalizedMessage.id,
-          sender: normalizedMessage.sender,
-          timestamp: normalizedMessage.timestamp
-        });
         
         // Priority: sender_type > sender > default
         // Backend uses: "user" (customer/widget), "human" (admin/agent), "ai" (bot)
@@ -373,13 +344,6 @@ export default function EmbedPage() {
         // message:new events have: id (event ID), message_id (actual message ID)
         // meta_message_created events have: messageId (actual message ID)
         const messageId = normalizedMessage.id || (message as any).messageId || (message as any).message_id;
-        console.log('[Widget] STEP 1 - Checking for duplicate by ID:', {
-          messageId,
-          normalizedId: normalizedMessage.id,
-          message_messageId: (message as any).messageId,
-          message_message_id: (message as any).message_id,
-          existingMessageIds: prev.map(m => m.id)
-        });
         
         if (messageId) {
           const existingById = prev.find((m) => {
@@ -392,14 +356,8 @@ export default function EmbedPage() {
             return false;
           });
           if (existingById) {
-            // Message with this ID already exists - just update it (don't add duplicate)
-            console.log('[Widget] STEP 1 - Message with ID already exists, skipping duplicate:', messageId);
-            return prev; // Don't add duplicate, just return existing messages
-          } else {
-            console.log('[Widget] STEP 1 - No duplicate found by ID, proceeding to STEP 1.5');
+            return prev; // Don't add duplicate
           }
-        } else {
-          console.log('[Widget] STEP 1 - No message ID found, proceeding to STEP 1.5');
         }
 
         // STEP 1.5: Deduplicate admin/bot messages that arrive twice (message:new fast, then meta_message_created slow)
@@ -423,36 +381,10 @@ export default function EmbedPage() {
             // Increased from 10 seconds to handle cases where message:new and meta_message_created arrive >10 seconds apart
             const timeDiff = Math.abs(new Date(m.timestamp).getTime() - messageTime);
             const isWithinWindow = timeDiff < 60000;
-            
-            // Detailed logging for debugging
-            console.log('[Widget] STEP 1.5 - Checking duplicate candidate:', {
-              candidateText: m.text,
-              candidateSender: m.sender,
-              candidateTimestamp: m.timestamp,
-              candidateId: m.id,
-              newText: normalizedMessage.text,
-              newSender: normalizedMessage.sender,
-              newTimestamp: normalizedMessage.timestamp,
-              newId: messageId,
-              textMatch: m.text === normalizedMessage.text,
-              senderMatch: m.sender === normalizedMessage.sender,
-              timeDiff: timeDiff,
-              timeDiffSeconds: (timeDiff / 1000).toFixed(2),
-              withinWindow: isWithinWindow
-            });
-            
             return isWithinWindow;
           });
           
           if (duplicateByContent) {
-            console.log('[Widget] STEP 1.5 - Admin/bot message duplicate found by text+sender+time, skipping:', {
-              text: normalizedMessage.text,
-              sender: normalizedMessage.sender,
-              sender_type: (normalizedMessage as any).sender_type,
-              existingId: duplicateByContent.id,
-              newId: messageId,
-              timeDiff: Math.abs(new Date(duplicateByContent.timestamp).getTime() - messageTime)
-            });
             return prev; // Skip duplicate
           }
         }
@@ -463,7 +395,6 @@ export default function EmbedPage() {
         if (serverTempId && normalizedMessage.id && normalizedMessage.id.startsWith('temp-') === false) {
           const pendingByTempId = prev.find((m) => m.id === serverTempId);
           if (pendingByTempId) {
-            console.log('[Widget] ✅ Replacing pending message by temp_id:', serverTempId, '→ real ID:', normalizedMessage.id);
             return prev.map((m) =>
               m.id === serverTempId
                 ? {
@@ -490,7 +421,6 @@ export default function EmbedPage() {
               Math.abs(new Date(m.timestamp).getTime() - messageTime) < 60000
           );
           if (pendingMessage) {
-            console.log('[Widget] ✅ Replacing pending message with server message (text+sender+time):', normalizedMessage.text, 'ID:', normalizedMessage.id);
             return prev.map((m) =>
               m.id === pendingMessage.id
                 ? {
@@ -520,8 +450,6 @@ export default function EmbedPage() {
           );
           
           if (duplicate) {
-            // Duplicate found - skip adding it
-            console.log('[Widget] Duplicate message detected by text, skipping:', normalizedMessage.text);
             return prev;
           }
         }
@@ -543,11 +471,6 @@ export default function EmbedPage() {
     // Get website info
     const websiteInfo = getWebsiteInfo();
     const urlParams = new URLSearchParams(window.location.search);
-    console.log('[Widget] Website info:', websiteInfo);
-    console.log('[Widget] URL params:', urlParams.toString());
-    console.log('[Widget] URL param domain:', urlParams.get('domain'));
-    console.log('[Widget] URL param origin:', urlParams.get('origin'));
-    console.log('[Widget] Current window hostname:', typeof window !== 'undefined' ? window.location.hostname : 'N/A');
     
     // Validate that we have proper domain info (not webchat.amoiq.com)
     if (websiteInfo.domain === 'webchat.amoiq.com' || websiteInfo.origin?.includes('webchat.amoiq.com')) {
@@ -562,7 +485,6 @@ export default function EmbedPage() {
         origin: urlParams.get('origin'),
       });
     } else if (websiteInfo.domain || websiteInfo.origin) {
-      console.log('[Widget] ✅ Valid domain detected:', websiteInfo.domain || websiteInfo.origin);
     } else {
       console.warn('[Widget] ⚠️ No domain info available - Gateway may not be able to identify tenant');
     }
@@ -582,7 +504,6 @@ export default function EmbedPage() {
     const conversationExpired = isConversationExpired();
     
     if (sessionExpired || conversationExpired) {
-      console.log('[Widget] Session or conversation expired, clearing data');
       // Clear conversation data
       if (conversationExpired) {
         clearConversation();
@@ -594,21 +515,12 @@ export default function EmbedPage() {
       // Load messages from localStorage immediately (for instant display on refresh)
       const cachedMessages = loadMessagesFromStorage();
       if (cachedMessages.length > 0) {
-        console.log(`[Widget] Loaded ${cachedMessages.length} messages from cache`);
         setMessages(cachedMessages);
         // Check if clear button should be shown
         setShowClearButton(shouldShowClearButton());
       }
     }
     
-    console.log('[Widget] Session info:', {
-      sessionId: sessionInfo.sessionId,
-      fingerprint: sessionInfo.fingerprint,
-      hasValidSession: hasValidSession(),
-      userId: userId || 'anonymous',
-      conversationExpired,
-      sessionExpired,
-    });
     
     // Initialize API client with website info and user info
     // Pass tenantId (can be null) - Gateway will resolve from domain if not provided
@@ -625,7 +537,6 @@ export default function EmbedPage() {
     // Listen for chat open message from parent (when user clicks chat bubble)
     const handleMessage = (event: MessageEvent) => {
       if (event.data?.type === 'amoiq-widget-open') {
-        console.log('[Widget] Chat bubble clicked');
         handleChatBubbleClick();
       }
     };
@@ -643,7 +554,6 @@ export default function EmbedPage() {
     if (!apiRef.current) return;
     
     try {
-      console.log('[Widget] Initializing presence session...');
       const presenceResponse = await apiRef.current.createPresenceSession();
       
       if (!presenceResponse) {
@@ -651,11 +561,6 @@ export default function EmbedPage() {
         return;
       }
       
-      console.log('[Widget] Presence session created:', {
-        session_id: presenceResponse.session_id,
-        tenant_id: presenceResponse.tenant_id,
-        site_id: presenceResponse.site_id,
-      });
       
       setPresenceSession({
         session_id: presenceResponse.session_id,
@@ -679,7 +584,6 @@ export default function EmbedPage() {
         
         wsRef.current = new ChatWebSocketNative(tid, {
           onConnect: () => {
-            console.log('[Widget] Presence WebSocket connected');
             setIsConnected(true);
           },
           onDisconnect: () => {
@@ -690,17 +594,14 @@ export default function EmbedPage() {
             setWsError(error.message || 'WebSocket connection failed');
           },
           onConversationCreated: async (conversationId) => {
-            console.log('[Widget] Conversation created via WebSocket:', conversationId);
             // Conversation was created by backend, update state
             setChatState('active');
             
             // Load message history after conversation is created
             if (apiRef.current) {
               try {
-                console.log('[Widget] Loading message history for conversation:', conversationId);
                 const history = await apiRef.current.getConversationMessages(conversationId);
                 if (history && history.length > 0) {
-                  console.log('[Widget] Loaded', history.length, 'messages from history');
                   const historyMessages: Message[] = history.map((msg: any) => ({
                     id: msg.id,
                     text: msg.message_text || msg.text,
@@ -716,7 +617,6 @@ export default function EmbedPage() {
             }
           },
           onConversationClosed: () => {
-            console.log('[Widget] Conversation closed due to inactivity');
             setConversationClosed(true);
             addSystemMessage('This conversation has been closed due to inactivity. You can start a new conversation at any time.');
           },
@@ -738,7 +638,6 @@ export default function EmbedPage() {
   const handleChatBubbleClick = async () => {
     // Wait for presence session if it's still initializing
     if (!presenceSession) {
-      console.log('[Widget] Presence session not ready, waiting for initialization...');
       // Wait up to 5 seconds for presence session
       let attempts = 0;
       while (!presenceSession && attempts < 50) {
@@ -810,10 +709,6 @@ export default function EmbedPage() {
       // conversation_id comes later from conversation:created event on session room
       const storedVisitorId = getVisitorId();
       const sessionId = presenceSession?.session_id;
-      console.log('[Widget] Initializing session...', {
-        hasVisitorId: !!storedVisitorId,
-        sessionId,
-      });
       
       const initResult = await apiRef.current.initializeConversation(storedVisitorId || undefined, sessionId);
       
@@ -823,7 +718,6 @@ export default function EmbedPage() {
       
       // Check if previous conversation was closed
       if (initResult.closed_at) {
-        console.log('[Widget] Previous conversation was closed, notifying user');
         addSystemMessage('The previous conversation has been closed. Starting a new conversation.');
         setConversationClosed(false); // Reset closed state
       }
@@ -831,7 +725,6 @@ export default function EmbedPage() {
       // Session-first flow: reconnect WebSocket with init's ws_token and join session room
       // conversation_id will come from conversation:created event
       if (wsRef.current) {
-        console.log('[Widget] Connecting to session room with init credentials:', initResult.session_id);
         // Disconnect existing presence connection and reconnect with init's token
         await wsRef.current.connectPresence(
           initResult.ws_token,
@@ -866,11 +759,9 @@ export default function EmbedPage() {
     if (!apiRef.current) return;
     
     try {
-      console.log('[Widget] Loading conversation history from API...');
       const history = await apiRef.current.getMessages();
       
       if (history.length > 0) {
-        console.log(`[Widget] Loaded ${history.length} messages from API`);
         // Merge with existing messages (from cache) to avoid duplicates
         setMessages((prev) => {
           const existingIds = new Set(prev.map(m => m.id));
@@ -890,7 +781,6 @@ export default function EmbedPage() {
           return allMessages;
         });
       } else {
-        console.log('[Widget] No conversation history found from API');
         // If we have cached messages but API returns empty, keep cached messages
         // (API might not have synced yet, or messages are still being processed)
       }
@@ -984,7 +874,6 @@ export default function EmbedPage() {
     try {
       // Prefer HTTP API for consistency and reliability
       if (apiRef.current) {
-        console.log('[Widget] Sending message via HTTP API');
         const response = await apiRef.current.sendMessage(messageText, { temp_id: tempId });
         
         // Check if conversation was closed and retried
@@ -1022,15 +911,10 @@ export default function EmbedPage() {
         
         if (conversationId && wsRef.current) {
           if (wsRef.current.isConnected()) {
-            console.log('[Widget] After HTTP send, switching WebSocket to conversation room:', conversationId);
             // Switch to conversation room to receive meta_message_created events
             wsRef.current.switchToConversationRoom(conversationId);
           } else {
             console.warn('[Widget] WebSocket not connected, cannot join conversation room:', conversationId);
-            console.log('[Widget] WebSocket connection status:', {
-              isConnected: wsRef.current.isConnected(),
-              hasSocket: !!wsRef.current,
-            });
           }
         } else {
           console.warn('[Widget] No conversation ID available after sending message', {

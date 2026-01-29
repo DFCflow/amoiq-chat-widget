@@ -114,7 +114,6 @@ export class ChatWebSocketNative {
           referrer: params?.get('referrer') || undefined,
           siteId: params?.get('siteId') || undefined,
         };
-        console.log('[Socket.IO] Using website info from URL params:', this.websiteInfo);
       } else {
         // Last resort: use provided websiteInfo even if empty, or getWebsiteInfo() if not on webchat domain
         const fallback = this.getWebsiteInfo();
@@ -142,11 +141,6 @@ export class ChatWebSocketNative {
    */
   updateCallbacks(newCallbacks: WebSocketCallbacks): void {
     this.callbacks = { ...this.callbacks, ...newCallbacks };
-    console.log('[Socket.IO] Callbacks updated:', {
-      hasOnMessage: !!this.callbacks.onMessage,
-      hasOnConnect: !!this.callbacks.onConnect,
-      hasOnDisconnect: !!this.callbacks.onDisconnect
-    });
   }
 
   /**
@@ -188,15 +182,12 @@ export class ChatWebSocketNative {
 
     // Disconnect existing socket if it exists
     if (this.socket && this.socket.connected) {
-      console.log('[Socket.IO] Disconnecting existing socket before connecting presence...');
       this.socket.removeAllListeners();
       this.socket.disconnect();
       this.socket = null;
     }
 
     try {
-      console.log('[Socket.IO] Connecting to presence WebSocket:', wsServerUrl.replace(/\/\/.*@/, '//***@'));
-      
       this.socket = io(wsServerUrl, {
         auth: {
           token: wsToken,
@@ -214,56 +205,18 @@ export class ChatWebSocketNative {
         reconnectionDelayMax: 5000,
       });
 
-      // 🔍 DEBUG: Listen to ALL events to see what's actually being received
-      this.socket.onAny((eventName: string, ...args: any[]) => {
-        console.log('[Socket.IO] 🔍 DEBUG - Received ANY event:', {
-          eventName,
-          argsCount: args.length,
-          firstArg: args[0],
-          firstArgType: typeof args[0],
-          firstArgKeys: args[0] && typeof args[0] === 'object' ? Object.keys(args[0]) : 'N/A',
-        });
-      });
-
-      // Decode JWT token to see session ID in token
-      try {
-        const base64Url = wsToken.split('.')[1];
-        const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
-        const jsonPayload = decodeURIComponent(atob(base64).split('').map((c) => {
-          return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);
-        }).join(''));
-        const tokenPayload = JSON.parse(jsonPayload);
-        console.log('[Socket.IO] DEBUG - JWT token payload:', {
-          sessionId: tokenPayload.sessionId || tokenPayload.session_id,
-          userId: tokenPayload.userId || tokenPayload.user_id || tokenPayload.sub,
-          tenantId: tokenPayload.tenantId || tokenPayload.tenant_id,
-          fullPayload: tokenPayload,
-        });
-      } catch (e) {
-        console.warn('[Socket.IO] DEBUG - Could not decode token:', e);
-      }
-
       // Set up event listeners
       this.setupPresenceEventListeners();
       
       // Wait for connection and join session room
       this.socket.on('connect', () => {
-        console.log('[Socket.IO] ✅ Presence WebSocket connected');
-        console.log('[Socket.IO] DEBUG - Socket ID:', this.socket?.id);
-        console.log('[Socket.IO] DEBUG - Session ID being used:', sessionId);
         this.reconnectAttempts = 0;
         
         // Join session room for presence tracking
         if (this.socket && sessionId) {
           const roomName = `session:${sessionId}`;
-          console.log('[Socket.IO] Joining presence room:', roomName);
           this.socket.emit('join:session', { sessionId });
           this.currentRoom = roomName;
-          
-          // Listen for join confirmation
-          this.socket.once('joined', (data: any) => {
-            console.log('[Socket.IO] ✅ Confirmed joined room:', data);
-          });
         }
         
         this.callbacks.onConnect?.();
@@ -275,8 +228,7 @@ export class ChatWebSocketNative {
         this.callbacks.onError?.(error);
       });
 
-      this.socket.on('disconnect', (reason: string) => {
-        console.log('[Socket.IO] Presence disconnected:', reason);
+      this.socket.on('disconnect', () => {
         this.callbacks.onDisconnect?.();
       });
     } catch (error) {
@@ -293,12 +245,10 @@ export class ChatWebSocketNative {
 
     // Listen for session updates
     this.socket.on('session:update', (data: any) => {
-      console.log('[Socket.IO] Session update received:', data);
       this.callbacks.onSessionUpdate?.(data);
       
       // If conversation_id is provided in update, switch to conversation room
       if (data.conversation_id && !this.conversationId) {
-        console.log('[Socket.IO] Conversation ID received in session update, switching to conversation room');
         this.conversationId = data.conversation_id;
         this.switchToConversationRoom(data.conversation_id);
       }
@@ -306,7 +256,6 @@ export class ChatWebSocketNative {
 
     // Listen for conversation created events
     this.socket.on('conversation:created', (data: { conversation_id: string }) => {
-      console.log('[Socket.IO] Conversation created event received:', data);
       if (data.conversation_id) {
         this.conversationId = data.conversation_id;
         // Don't call onConversationCreated here - it will be called after joining the room
@@ -316,11 +265,9 @@ export class ChatWebSocketNative {
 
     // Listen for conversation:new events (new event name from backend)
     this.socket.on('conversation:new', (data: { id?: string; conversation_id?: string }) => {
-      console.log('[Socket.IO] Conversation:new event received:', data);
       // Handle both 'id' and 'conversation_id' formats
       const conversationId = data.id || data.conversation_id;
       if (conversationId) {
-        console.log('[Widget] New conversation created, switching to conversation room:', conversationId);
         this.conversationId = conversationId;
         // Don't call onConversationCreated here - it will be called after joining the room
         // Automatically switch from session room to conversation room
@@ -331,7 +278,6 @@ export class ChatWebSocketNative {
     // Listen for conversation:update events (broadcasted to session room when conversation is updated)
     // According to backend docs: conversation:update uses 'id' field (REQUIRED) and is broadcast to session:{sessionId} room
     this.socket.on('conversation:update', (data: { id?: string; conversation_id?: string; conversationId?: string }) => {
-      console.log('[Socket.IO] Conversation:update event received:', data);
       // Handle multiple possible field names for conversation ID
       // Backend uses 'id' field per WEBSOCKET_PAYLOADS.md, but we support all variants for compatibility
       const conversationId = data.id || data.conversation_id || data.conversationId;
@@ -341,14 +287,12 @@ export class ChatWebSocketNative {
         const shouldSwitch = !this.conversationId || !this.currentRoom?.startsWith('conversation:');
         
         if (shouldSwitch) {
-          console.log('[Widget] Conversation update received, switching to conversation room:', conversationId);
           this.conversationId = conversationId;
           // Don't call onConversationCreated here - it will be called after joining the room
           // Automatically switch from session room to conversation room
           this.switchToConversationRoom(conversationId);
         } else if (this.conversationId !== conversationId) {
           // Conversation ID changed, switch to new conversation room
-          console.log('[Widget] Conversation ID changed, switching to new conversation room:', conversationId);
           this.conversationId = conversationId;
           this.switchToConversationRoom(conversationId);
         }
@@ -357,7 +301,6 @@ export class ChatWebSocketNative {
 
     // Listen for conversation closed events
     this.socket.on('conversation:closed', (data: { conversation_id: string }) => {
-      console.log('[Socket.IO] Conversation closed event received:', data);
       if (data.conversation_id === this.conversationId) {
         this.callbacks.onConversationClosed?.();
       }
@@ -366,11 +309,8 @@ export class ChatWebSocketNative {
     // ALSO listen for message events in session room (to catch messages before room switch)
     // This handles race condition where backend broadcasts to both rooms simultaneously
     this.socket.on('meta_message_created', (data: any) => {
-      console.log('[Socket.IO] ✅ meta_message_created event received in session room:', data);
-      
       // If we're already in conversation room, skip - let conversation room listener handle it
       if (this.currentRoom?.startsWith('conversation:')) {
-        console.log('[Socket.IO] Skipping meta_message_created in session room - already in conversation room');
         return;
       }
       
@@ -379,7 +319,6 @@ export class ChatWebSocketNative {
       // Check for duplicate BEFORE transforming/handling
       const messageKey = this.getMessageKey(rawMessage);
       if (this.hasProcessedMessage(messageKey)) {
-        console.log('[Socket.IO] Skipping duplicate meta_message_created in session room:', messageKey);
         return;
       }
       
@@ -395,7 +334,6 @@ export class ChatWebSocketNative {
       if (messageConversationId) {
         // If we don't have conversationId yet, set it and switch rooms
         if (!this.conversationId) {
-          console.log('[Widget] Conversation ID found in message, switching to conversation room:', messageConversationId);
           this.conversationId = messageConversationId;
           // Don't call onConversationCreated here - it will be called after joining the room
           this.switchToConversationRoom(messageConversationId);
@@ -414,11 +352,8 @@ export class ChatWebSocketNative {
     });
 
     this.socket.on('message:new', (data: any) => {
-      console.log('[Socket.IO] ✅ message:new event received in session room:', data);
-      
       // If we're already in conversation room, skip - let conversation room listener handle it
       if (this.currentRoom?.startsWith('conversation:')) {
-        console.log('[Socket.IO] Skipping message:new in session room - already in conversation room');
         return;
       }
       
@@ -427,7 +362,6 @@ export class ChatWebSocketNative {
       // Check for duplicate BEFORE transforming/handling
       const messageKey = this.getMessageKey(rawMessage);
       if (this.hasProcessedMessage(messageKey)) {
-        console.log('[Socket.IO] Skipping duplicate message:new in session room:', messageKey);
         return;
       }
       
@@ -442,7 +376,6 @@ export class ChatWebSocketNative {
       if (messageConversationId) {
         // If we don't have conversationId yet, set it and switch rooms
         if (!this.conversationId) {
-          console.log('[Widget] Conversation ID found in message:new, switching to conversation room:', messageConversationId);
           this.conversationId = messageConversationId;
           // Don't call onConversationCreated here - it will be called after joining the room
           this.switchToConversationRoom(messageConversationId);
@@ -477,27 +410,15 @@ export class ChatWebSocketNative {
     // Join conversation room FIRST (before leaving session room)
     // This ensures we're in the room when messages are broadcast
     const roomName = `conversation:${conversationId}`;
-    console.log('[Socket.IO] Joining conversation room:', roomName);
     this.socket.emit('join:conversation', { conversationId });
     this.currentRoom = roomName;
 
     // Listen for joined confirmation, THEN leave session room
-    this.socket.once('joined', (data: { conversation_id: string; room: string }) => {
-      console.log('[Socket.IO] ✅ Joined conversation room:', {
-        conversation_id: data.conversation_id,
-        room: data.room,
-      });
-      
+    this.socket.once('joined', () => {
       // NOW it's safe to leave session room - we're confirmed in conversation room
       if (this.presenceSessionId) {
-        const sessionRoom = `session:${this.presenceSessionId}`;
-        console.log('[Socket.IO] Now leaving session room:', sessionRoom);
         this.socket?.emit('leave:session', { sessionId: this.presenceSessionId });
       }
-      
-      // Trigger callback to load message history
-      // This ensures history is loaded AFTER we're fully in the conversation room
-      console.log('[Socket.IO] Calling onConversationCreated after joined confirmation');
       this.callbacks.onConversationCreated?.(conversationId);
     });
   }
@@ -531,14 +452,12 @@ export class ChatWebSocketNative {
     // These will work in both session and conversation rooms (Socket.IO delivers to all listeners)
     // But we filter by conversation_id to only process relevant messages
     this.socket.on('meta_message_created', (data: any) => {
-      console.log('[Socket.IO] ✅ meta_message_created event received:', data);
       // WebSocket payload format: { message: { text: string, ... } } or direct message object
       const rawMessage = data.message || data;
       
       // Check for duplicate BEFORE transforming/handling
       const messageKey = this.getMessageKey(rawMessage);
       if (this.hasProcessedMessage(messageKey)) {
-        console.log('[Socket.IO] Skipping duplicate meta_message_created:', messageKey);
         return;
       }
       
@@ -552,20 +471,16 @@ export class ChatWebSocketNative {
       // Or if we don't have conversationId yet, process it (will be handled by session room listener)
       if (!this.conversationId || !message.conversation_id || message.conversation_id === this.conversationId) {
         this.handleMessage(message);
-      } else {
-        console.log('[Socket.IO] Ignoring meta_message_created for different conversation:', message.conversation_id);
       }
     });
 
     this.socket.on('message:new', (data: any) => {
-      console.log('[Socket.IO] ✅ message:new event received:', data);
       // WebSocket payload format: { message: { text: string, messageId: string, ... } }
       const rawMessage = data.message || data;
       
       // Check for duplicate BEFORE transforming/handling
       const messageKey = this.getMessageKey(rawMessage);
       if (this.hasProcessedMessage(messageKey)) {
-        console.log('[Socket.IO] Skipping duplicate message:new:', messageKey);
         return;
       }
       
@@ -577,14 +492,11 @@ export class ChatWebSocketNative {
       // Filter: only process if message belongs to current conversation (if we have one)
       if (!this.conversationId || !message.conversation_id || message.conversation_id === this.conversationId) {
         this.handleMessage(message);
-      } else {
-        console.log('[Socket.IO] Ignoring message:new for different conversation:', message.conversation_id);
       }
     });
 
     this.socket.on('message', (data: any) => {
-      console.log('[Socket.IO] Message received:', data);
-      // Generic message events - process if no conversation_id or matches current
+      // Generic: process if no conversation_id or matches current
       if (!this.conversationId || !data.conversation_id || data.conversation_id === this.conversationId) {
         this.handleMessage(data);
       }
@@ -672,7 +584,6 @@ export class ChatWebSocketNative {
       
       // Check if conversation is closed
       if (data.closed_at) {
-        console.log('[Socket.IO] Session has closed conversation (closed_at:', data.closed_at, '), clearing stored conversation data');
         // Clear stored conversation data since it's closed
         clearConversation();
         // But we still need the token and connection info for new conversation
@@ -722,9 +633,7 @@ export class ChatWebSocketNative {
           tokenIntegrationId = tokenPayload.integration_id || tokenPayload.integrationId || null;
           // Check for site_id in token
           tokenSiteId = tokenPayload.site_id || tokenPayload.siteId || null;
-        } catch (e) {
-          console.warn('[Socket.IO] DEBUG - Could not extract fields from token:', e);
-        }
+        } catch (_e) {}
       }
       
       // Validate tenant_id - reject placeholder values
@@ -739,10 +648,8 @@ export class ChatWebSocketNative {
         finalTenantId = receivedTenantId;
       } else if (tokenTenantId && !placeholderValues.includes(String(tokenTenantId).toLowerCase())) {
         finalTenantId = tokenTenantId;
-        console.log('[Socket.IO] Using tenant_id from JWT token payload');
       } else if (this.tenantId && !placeholderValues.includes(String(this.tenantId).toLowerCase())) {
         finalTenantId = this.tenantId;
-        console.log('[Socket.IO] Using tenant_id from constructor');
       }
       
       // Extract integration_id: Gateway response > JWT token
@@ -750,7 +657,6 @@ export class ChatWebSocketNative {
         finalIntegrationId = data.integration_id;
       } else if (tokenIntegrationId && !placeholderValues.includes(String(tokenIntegrationId).toLowerCase())) {
         finalIntegrationId = tokenIntegrationId;
-        console.log('[Socket.IO] Using integration_id from JWT token payload');
       }
       
       // Extract site_id: Gateway response > JWT token
@@ -758,7 +664,6 @@ export class ChatWebSocketNative {
         finalSiteId = data.site_id;
       } else if (tokenSiteId && !placeholderValues.includes(String(tokenSiteId).toLowerCase())) {
         finalSiteId = tokenSiteId;
-        console.log('[Socket.IO] Using site_id from JWT token payload');
       }
       
       if (receivedTenantId && placeholderValues.includes(String(receivedTenantId).toLowerCase())) {
@@ -772,55 +677,6 @@ export class ChatWebSocketNative {
       this.integrationId = finalIntegrationId || this.integrationId;
       this.siteId = finalSiteId || this.siteId;
       
-      // Log where tenantId came from
-      console.log('[Socket.IO] DEBUG - Field extraction summary:', {
-        tenantId: {
-          from_gateway_response: receivedTenantId,
-          from_jwt_token: tokenTenantId,
-          from_constructor: this.tenantId !== finalTenantId ? this.tenantId : null,
-          final: this.tenantId,
-        },
-        integrationId: {
-          from_gateway_response: data.integration_id,
-          from_jwt_token: tokenIntegrationId,
-          final: this.integrationId,
-        },
-        siteId: {
-          from_gateway_response: data.site_id,
-          from_jwt_token: tokenSiteId,
-          final: this.siteId,
-        },
-        full_response: data,  // Show full Gateway response
-      });
-
-      // Debug logging - show tenantId details
-      console.log('[Socket.IO] Conversation initialized:', {
-        conversation_id: this.conversationId,
-        visitor_id: this.visitorId,
-        tenant_id: this.tenantId,
-        tenant_id_type: typeof this.tenantId,
-        tenant_id_value: this.tenantId,
-        integration_id: this.integrationId,
-        site_id: this.siteId,
-        ws_server_url: this.wsServerUrl,
-        expires_in: data.expires_in,
-      });
-      console.log('[Socket.IO] DEBUG - Init response data:', {
-        session_id: data.session_id,
-        visitor_id: data.visitor_id,
-        tenant_id: data.tenant_id,
-        tenant_id_type: typeof data.tenant_id,
-        tenant_id_raw: data.tenant_id,
-        integration_id: data.integration_id,
-        integration_id_type: typeof data.integration_id,
-        site_id: data.site_id,
-        site_id_type: typeof data.site_id,
-        has_ws_token: !!data.ws_token,
-        has_ws_server_url: !!data.ws_server_url,
-        expires_in: data.expires_in,
-        full_response: data,  // Full response for debugging - check if tenant_id, integration_id, site_id are here
-        response_keys: Object.keys(data),  // Show all keys in response
-      });
       // Decode JWT token to see payload (without verification)
       let tokenPayload: any = null;
       if (this.wsToken) {
@@ -831,18 +687,8 @@ export class ChatWebSocketNative {
             return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);
           }).join(''));
           tokenPayload = JSON.parse(jsonPayload);
-        } catch (e) {
-          console.warn('[Socket.IO] DEBUG - Could not decode token:', e);
-        }
+        } catch (_e) {}
       }
-      
-      console.log('[Socket.IO] DEBUG - Token received:', {
-        token_length: this.wsToken?.length || 0,
-        token_preview: this.wsToken ? `${this.wsToken.substring(0, 20)}...${this.wsToken.substring(this.wsToken.length - 20)}` : 'null',
-        token_full: this.wsToken, // Full token for debugging (remove in production)
-        token_payload: tokenPayload, // Decoded JWT payload
-      });
-      console.log('[Socket.IO] DEBUG - Server URL:', this.wsServerUrl);
 
       return data;
     } catch (error) {
@@ -870,49 +716,17 @@ export class ChatWebSocketNative {
     }
 
     if (this.socket && this.socket.connected) {
-      console.log('[Socket.IO] Already connected');
       return;
     }
 
     // Disconnect existing socket if it exists but is not connected
     if (this.socket && !this.socket.connected) {
-      console.log('[Socket.IO] Disconnecting existing socket before reconnecting...');
       this.socket.removeAllListeners(); // Remove all listeners to prevent duplicates
       this.socket.disconnect();
       this.socket = null;
     }
 
     try {
-      // Connect to Socket.IO server using ws_server_url with token in auth object
-      console.log('[Socket.IO] Connecting to:', this.wsServerUrl.replace(/\/\/.*@/, '//***@')); // Hide credentials in log
-      
-      // Decode JWT token to see payload (without verification)
-      let tokenPayload: any = null;
-      if (this.wsToken) {
-        try {
-          const base64Url = this.wsToken.split('.')[1];
-          const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
-          const jsonPayload = decodeURIComponent(atob(base64).split('').map((c) => {
-            return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);
-          }).join(''));
-          tokenPayload = JSON.parse(jsonPayload);
-        } catch (e) {
-          console.warn('[Socket.IO] DEBUG - Could not decode token:', e);
-        }
-      }
-      
-      // Debug logging - what we're sending
-      console.log('[Socket.IO] DEBUG - Connection config:', {
-        ws_server_url: this.wsServerUrl,
-        has_token: !!this.wsToken,
-        token_length: this.wsToken?.length || 0,
-        token_preview: this.wsToken ? `${this.wsToken.substring(0, 20)}...${this.wsToken.substring(this.wsToken.length - 20)}` : 'null',
-        token_payload: tokenPayload, // Decoded JWT payload - check role, anonymous, user_id
-        auth_object: { token: this.wsToken ? '***' : undefined },
-        query_param: { token: this.wsToken ? '***' : undefined },
-        authorization_header: this.wsToken ? 'Bearer ***' : undefined,
-      });
-      
       this.socket = io(this.wsServerUrl, {
         auth: {
           token: this.wsToken,
@@ -929,93 +743,37 @@ export class ChatWebSocketNative {
         reconnectionDelay: 1000,
         reconnectionDelayMax: 5000,
       });
-      
-      console.log('[Socket.IO] DEBUG - Socket.IO client created, waiting for connection...');
-      console.log('[Socket.IO] DEBUG - Setting up event listeners...');
 
       // Set up event listeners BEFORE connection is established
-      // This ensures listeners are ready when connection happens
-      
-      // DEBUG: Listen to ALL events to see what's actually being received
-      this.socket.onAny((eventName: string, ...args: any[]) => {
-        console.log('[Socket.IO] 🔍 DEBUG - Received ANY event:', {
-          eventName,
-          argsCount: args.length,
-          firstArg: args[0],
-          firstArgType: typeof args[0],
-          firstArgKeys: args[0] && typeof args[0] === 'object' ? Object.keys(args[0]) : 'N/A',
-        });
-      });
-      
-      // Handle incoming messages
       this.socket.on('message', (data: any) => {
-        console.log('[Socket.IO] Message received:', data);
         this.handleMessage(data);
       });
 
       // Handle meta_message_created events (from backend when messages are saved to DB)
-      // This is how admin/agent messages are delivered to frontend
       this.socket.on('meta_message_created', (data: any) => {
-        console.log('[Socket.IO] ✅ meta_message_created event received:', data);
-        console.log('[Socket.IO] DEBUG - Event data structure:', {
-          has_message: !!data.message,
-          has_data: !!data,
-          data_keys: data ? Object.keys(data) : [],
-          data_type: typeof data,
-          is_array: Array.isArray(data),
-        });
-        // Extract message from data.message or use data directly
         const rawMessage = data.message || data;
-        
-        // Check for duplicate BEFORE transforming/handling
         const messageKey = this.getMessageKey(rawMessage);
         if (this.hasProcessedMessage(messageKey)) {
-          console.log('[Socket.IO] Skipping duplicate meta_message_created in connect():', messageKey);
           return;
         }
-        
-        // Mark as processed BEFORE transforming/handling
         this.markMessageProcessed(messageKey);
-        
-        const message = rawMessage;
-        console.log('[Socket.IO] DEBUG - Extracted message:', message);
-        console.log('[Socket.IO] DEBUG - Calling handleMessage with:', message);
-        this.handleMessage(message);
+        this.handleMessage(rawMessage);
       });
 
       // Handle message:new events (alternative event name used by server)
       this.socket.on('message:new', (data: any) => {
-        console.log('[Socket.IO] ✅ message:new event received:', data);
-        console.log('[Socket.IO] DEBUG - Event data structure:', {
-          has_message: !!data.message,
-          has_data: !!data,
-          data_keys: data ? Object.keys(data) : [],
-          data_type: typeof data,
-          is_array: Array.isArray(data),
-        });
-        // Extract message from data.message or use data directly (same as meta_message_created)
         const rawMessage = data.message || data;
-        
-        // Check for duplicate BEFORE transforming/handling
         const messageKey = this.getMessageKey(rawMessage);
         if (this.hasProcessedMessage(messageKey)) {
-          console.log('[Socket.IO] Skipping duplicate message:new in connect():', messageKey);
           return;
         }
-        
-        // Mark as processed BEFORE transforming/handling
         this.markMessageProcessed(messageKey);
-        
-        // Transform message:new format to expected message format
         const message = this.transformMessageNewToMessage(rawMessage);
-        console.log('[Socket.IO] DEBUG - Transformed message:', message);
-        console.log('[Socket.IO] DEBUG - Calling handleMessage with:', message);
         this.handleMessage(message);
       });
 
       // Handle AI event created events (optional, for AI responses)
       this.socket.on('ai_event_created', (data: any) => {
-        console.log('[Socket.IO] AI event created:', data);
         // Extract message from data.message or use data directly
         const message = data.message || data;
         this.handleMessage(message);
@@ -1023,41 +781,28 @@ export class ChatWebSocketNative {
 
       // Handle presence events
       this.socket.on('user_online', (data: OnlineUser) => {
-        console.log('[Socket.IO] User online:', data);
         this.callbacks.onUserOnline?.(data);
       });
 
       this.socket.on('user_offline', (data: { userId: string } | string) => {
         const userId = typeof data === 'string' ? data : data.userId;
-        console.log('[Socket.IO] User offline:', userId);
         this.callbacks.onUserOffline?.(userId);
       });
 
       this.socket.on('online_users_list', (data: { users?: OnlineUser[] } | OnlineUser[]) => {
         const users = Array.isArray(data) ? data : (data.users || []);
-        console.log('[Socket.IO] Online users list:', users);
         this.callbacks.onOnlineUsersList?.(users);
       });
 
       // Connection established
       this.socket.on('connect', () => {
-        console.log('[Socket.IO] ✅ Connected successfully');
-        console.log('[Socket.IO] DEBUG - Connection details:', {
-          id: this.socket?.id,
-          connected: this.socket?.connected,
-          transport: this.socket?.io?.engine?.transport?.name,
-        });
         this.reconnectAttempts = 0;
         
         // Session-first flow: join session room first, wait for conversation:created
         if (this.conversationId && this.socket) {
-          // If we already have conversationId (e.g. from conversation:created), join conversation room
-          console.log('[Socket.IO] Joining conversation room:', this.conversationId);
           this.switchToConversationRoom(this.conversationId);
         } else if (this.presenceSessionId && this.socket) {
-          // No conversationId yet - join session room and wait for conversation:created event
           const roomName = `session:${this.presenceSessionId}`;
-          console.log('[Socket.IO] Joining session room:', roomName);
           this.socket.emit('join:session', { sessionId: this.presenceSessionId });
           this.currentRoom = roomName;
         } else {
@@ -1072,53 +817,26 @@ export class ChatWebSocketNative {
       });
 
       // Listen for joined event from server (confirmation of room join)
-      this.socket.on('joined', (data: { conversation_id: string; room: string }) => {
-        console.log('[Socket.IO] ✅ Joined conversation room:', {
-          conversation_id: data.conversation_id,
-          room: data.room,
-        });
-        console.log('[Socket.IO] DEBUG - Room join confirmed. Socket is now listening for events in room:', data.room);
-      });
+      this.socket.on('joined', () => {});
 
       // Handle connection errors
       this.socket.on('connect_error', (error: Error) => {
-        console.error('[Socket.IO] ❌ Connection error:', error);
-        console.error('[Socket.IO] DEBUG - Connection error details:', {
-          message: error.message,
-          name: error.name,
-          stack: error.stack,
-          socket_id: this.socket?.id,
-          socket_connected: this.socket?.connected,
-        });
+        console.error('[Socket.IO] Connection error:', error);
         this.reconnectAttempts++;
         this.callbacks.onError?.(error);
       });
 
       // Handle disconnection
       this.socket.on('disconnect', (reason: string) => {
-        console.log('[Socket.IO] Disconnected:', reason);
-        console.log('[Socket.IO] DEBUG - Disconnect details:', {
-          reason: reason,
-          socket_id: this.socket?.id,
-          reconnect_attempts: this.reconnectAttempts,
-        });
         this.callbacks.onDisconnect?.();
 
-        // Check if token might be expired
         const isTokenExpired = this.isTokenExpired();
         const isAuthError = reason === 'io server disconnect' || 
                            reason.includes('auth') || 
                            reason.includes('token') ||
                            reason.includes('unauthorized');
 
-        // Attempt reconnection if needed (Socket.IO handles this automatically, but we can re-initialize if token expired)
         if (this.shouldReconnect && (isAuthError || isTokenExpired)) {
-          // Server disconnected us or token expired, need to re-authenticate
-          console.log('[Socket.IO] Token expired or auth error, re-initializing...', {
-            reason,
-            isTokenExpired,
-            isAuthError,
-          });
           this.initialize(this.visitorId).then(() => {
             if (this.wsToken && this.wsServerUrl) {
               this.connect();
@@ -1148,21 +866,6 @@ export class ChatWebSocketNative {
     // Preserve all original fields first
     // WebSocket payload format: { message: { text: string, sender: string, messageId: string, ... } }
     
-    // Debug: Log what we're transforming
-    console.log('[Socket.IO] Transform input:', {
-      hasText: !!data.text,
-      hasMessageText: !!data.message_text,
-      hasMessage: !!data.message,
-      text: data.text,
-      message_text: data.message_text,
-      message: data.message,
-      id: data.id,
-      message_id: data.message_id,
-      messageId: data.messageId,
-      sender_type: data.sender_type,
-      allKeys: Object.keys(data)
-    });
-    
     const transformed = {
       ...data,
       // Override with normalized fields (these take precedence)
@@ -1179,15 +882,6 @@ export class ChatWebSocketNative {
       metadata: data.metadata,
     };
     
-    // Debug: Log transformation result
-    console.log('[Socket.IO] Transform output:', {
-      text: transformed.text,
-      id: transformed.id,
-      sender: transformed.sender,
-      timestamp: transformed.timestamp,
-      hasText: !!transformed.text
-    });
-    
     // If sender is a UUID (user ID), we'll let the normalization in embed/page.tsx handle it
     // But ensure we have the original sender field preserved
     if (data.sender && !transformed.senderId) {
@@ -1201,35 +895,8 @@ export class ChatWebSocketNative {
    * Handle incoming messages from Socket.IO
    */
   private handleMessage(data: any): void {
-    console.log('[Socket.IO] handleMessage called with:', data);
-    console.log('[Socket.IO] DEBUG - Message structure:', {
-      has_type: !!data?.type,
-      type_value: data?.type,
-      has_message: !!data?.message,
-      has_callbacks: !!this.callbacks.onMessage,
-      data_keys: data ? Object.keys(data) : [],
-    });
-    
-    // CRITICAL: Always transform the message to ensure consistent format
-    // This ensures message_text -> text conversion happens regardless of which listener received it
     const transformedMessage = this.transformMessageNewToMessage(data);
-    
-    console.log('[Socket.IO] Transformed message before callback:', {
-      originalHasText: !!data.text,
-      originalHasMessageText: !!data.message_text,
-      originalText: data.text,
-      originalMessageText: data.message_text,
-      transformedHasText: !!transformedMessage.text,
-      transformedText: transformedMessage.text,
-      transformedId: transformedMessage.id,
-      transformedSender: transformedMessage.sender
-    });
-    
-    // Pass the transformed message to the callback
-    console.log('[Socket.IO] Calling onMessage callback with transformed message');
     this.callbacks.onMessage?.(transformedMessage);
-    
-    console.log('[Socket.IO] handleMessage completed');
   }
 
   /**
@@ -1330,44 +997,10 @@ export class ChatWebSocketNative {
       message.temp_id = tempId;
     }
 
-    // Debug logging - show complete message payload
-    console.log('[Socket.IO] DEBUG - Complete message payload being sent:', message);
-    console.log('[Socket.IO] DEBUG - Message payload details:', {
-      type: message.type,
-      text: message.text,
-      tenantId: message.tenantId,
-      tenantId_type: typeof message.tenantId,
-      tenant_id: message.tenant_id,
-      tenant_id_type: typeof message.tenant_id,
-      integration_id: message.integration_id,
-      integrationId: message.integrationId,
-      site_id: message.site_id,
-      siteId: message.siteId,
-      conversation_id: message.conversation_id,
-      visitor_id: message.visitor_id,
-      sessionId: message.sessionId,
-      fingerprint: message.fingerprint,
-      timestamp: message.timestamp,
-      domain: message.domain,
-      origin: message.origin,
-      url: message.url,
-      referrer: message.referrer,
-      siteId_from_websiteInfo: message.siteId,
-      userId: message.userId,
-      userInfo: message.userInfo,
-    });
-    console.log('[Socket.IO] DEBUG - Full payload JSON:', JSON.stringify(message, null, 2));
-
     try {
       this.socket.emit('message', message);
-      console.log('[Socket.IO] Message sent successfully:', { 
-        text, 
-        conversation_id: this.conversationId,
-        tenantId: this.tenantId,
-      });
     } catch (error) {
       console.error('[Socket.IO] Error sending message:', error);
-      console.error('[Socket.IO] DEBUG - Failed message payload:', message);
       throw error;
     }
   }
@@ -1416,11 +1049,8 @@ export class ChatWebSocketNative {
       return;
     }
 
-    console.log(`[Socket.IO] Token refresh scheduled in ${Math.round(refreshInMs / 1000)}s`);
-
     this.tokenRefreshTimer = setTimeout(async () => {
       if (this.socket && this.socket.connected) {
-        console.log('[Socket.IO] Proactively refreshing token before expiration...');
         try {
           // Re-initialize to get new token
           const result = await this.initialize(this.visitorId);
