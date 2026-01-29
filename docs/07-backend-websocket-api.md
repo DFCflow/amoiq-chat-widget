@@ -200,9 +200,11 @@ X-Website-Domain: example.com
 
 ### 3. POST /webchat/init
 
-**Purpose:** Initialize or retrieve conversation. Called after user enters their name.
+**Purpose:** Initialize session for chat. Returns session credentials and WebSocket token. Called after user enters their name.
 
 **When Called:** After user submits their name in the welcome message
+
+**Session-First Flow:** Init returns `session_id`, NOT `conversation_id`. The frontend connects to the session room with `ws_token` and receives `conversation_id` via `conversation:created` event when the backend worker creates the conversation.
 
 **Request Headers:**
 ```http
@@ -221,6 +223,7 @@ X-Website-Domain: example.com
   "referrer": "https://google.com",
   "siteId": "site-123",
   "tenantId": "tenant-123",
+  "sessionId": "session-789-abc123",
   "visitorId": "visitor-uuid-here",
   "userId": "user-456",
   "userInfo": {
@@ -230,10 +233,14 @@ X-Website-Domain: example.com
 }
 ```
 
+**Request Fields:**
+- `sessionId` (optional): Session ID from `/webchat/session` or localStorage. If provided, backend uses this session.
+- `visitorId` (optional): For returning users to continue existing conversation.
+
 **Response:**
 ```json
 {
-  "conversation_id": "conv-uuid-here",
+  "session_id": "session-789-abc123",
   "visitor_id": "visitor-uuid",
   "ws_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
   "ws_server_url": "wss://ws-server.example.com",
@@ -245,27 +252,29 @@ X-Website-Domain: example.com
 }
 ```
 
+**Note:** Response does NOT include `conversation_id`. Frontend receives `conversation_id` from `conversation:created` event on session room.
+
 **Backend Actions:**
-1. Create or retrieve conversation:
-   - If `visitorId` provided and conversation exists → return existing conversation
-   - If `visitorId` provided but conversation closed → create new conversation
-   - If no `visitorId` → create new conversation
+1. Create or retrieve session:
+   - If `sessionId` provided → use existing session
+   - If no `sessionId` → create new session
 
 2. Generate JWT token with:
-   - `conversation_id`
+   - `session_id`
    - `visitor_id`
    - `tenant_id`
    - `integration_id`
    - `site_id`
    - Expiration: 15 minutes (900 seconds)
 
-3. Store conversation in database with:
-   - `conversation_id`
-   - `visitor_id`
-   - `tenant_id`
-   - `status`: "active"
-   - `created_at`
-   - `last_activity`
+3. Backend worker creates conversation asynchronously and broadcasts to session room
+
+**Frontend Flow:**
+1. Call `/webchat/init` with `sessionId` (if available) and `visitorId` (for returning users)
+2. Connect WebSocket with `ws_token` from response
+3. Join session room: `session:{session_id}`
+4. Wait for `conversation:created` event with `{ conversation_id: "xxx" }`
+5. When received, switch to conversation room or store `conversation_id` for send/history
 
 **WebSocket Broadcast:**
 - Broadcast to room `session:{session_id}`:
@@ -372,6 +381,7 @@ X-Website-Domain: example.com
     "event": "meta_message_created",
     "message": {
       "id": "msg-123",
+      "temp_id": "temp-1738...",
       "text": "Hello",
       "sender_type": "user",
       "sender_name": "John",
@@ -380,6 +390,7 @@ X-Website-Domain: example.com
     }
   }
   ```
+  When the client sent a `temp_id` with the message, the server echoes it in `message.temp_id` so the widget can replace the optimistic message by matching `m.id === message.temp_id` and update to the real `id`.
 
 - If conversation was reopened, also broadcast:
   ```json
@@ -476,12 +487,14 @@ socket.emit('join:conversation', { conversationId: 'conv-uuid-here' });
 {
   "type": "message",
   "text": "Hello",
+  "temp_id": "temp-1738...",
   "conversation_id": "conv-uuid-here",
   "tenant_id": "tenant-123",
   "sender_name": "John",
   "timestamp": "2024-01-15T10:40:00.000Z"
 }
 ```
+Optional `temp_id`: client-generated id for optimistic message replacement; server echoes it in `meta_message_created` so the widget can match and replace with the real id.
 
 #### Server → Client
 
@@ -510,6 +523,7 @@ socket.emit('join:conversation', { conversationId: 'conv-uuid-here' });
 {
   "message": {
     "id": "msg-123",
+    "temp_id": "temp-1738...",
     "text": "Hello",
     "sender_type": "user" | "agent" | "bot",
     "sender_name": "John",
@@ -518,6 +532,7 @@ socket.emit('join:conversation', { conversationId: 'conv-uuid-here' });
   }
 }
 ```
+When the client sent a `temp_id`, the server includes it in `message.temp_id` so the widget (and all clients) can match the optimistic message by `m.id === message.temp_id` and replace it with the real `id`.
 
 **`conversation:closed`**
 ```json

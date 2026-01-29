@@ -4,7 +4,7 @@ import { useEffect, useState, useRef } from 'react';
 import { getTenantId } from '@/lib/tenant';
 import { ChatAPI, UserInfo } from '@/lib/api';
 import { ChatWebSocketNative } from '@/lib/ws-native';
-import { getSessionInfo, hasValidSession, getVisitorId, isConversationExpired, clearConversation, getSenderName, setSenderName } from '@/lib/session';
+import { getSessionInfo, hasValidSession, getVisitorId, isConversationExpired, clearConversation, getSenderName, setSenderName, getConversationId } from '@/lib/session';
 import styles from './styles.module.css';
 
 // Force dynamic rendering - no caching
@@ -303,6 +303,12 @@ export default function EmbedPage() {
           normalizedMessage.text = message.text;
         }
         
+        // Map temp_id / client_temp_id for optimistic message replacement (server echoes client temp_id in meta_message_created)
+        const tempIdFromServer = (message as any).temp_id ?? (message as any).client_temp_id;
+        if (tempIdFromServer) {
+          (normalizedMessage as any).temp_id = tempIdFromServer;
+        }
+        
         // Debug: Log normalized message
         console.log('[Widget] Normalized message:', {
           text: normalizedMessage.text,
@@ -442,69 +448,51 @@ export default function EmbedPage() {
           }
         }
 
-        // STEP 2: If message has a real ID (not temp) and we have a pending message with same text
-        // This handles the case: optimistic message (temp ID) → server echo (real ID)
-        if (normalizedMessage.id && 
-            normalizedMessage.id.startsWith('temp-') === false && 
-            normalizedMessage.text) {
-          const messageTime = new Date(normalizedMessage.timestamp || Date.now()).getTime();
-          
-          // Debug: Log what we're looking for
-          console.log('[Widget] Looking for pending message to replace:', {
-            text: normalizedMessage.text,
-            sender: normalizedMessage.sender,
-            id: normalizedMessage.id,
-            timestamp: normalizedMessage.timestamp,
-            pendingMessages: prev.filter(m => m.deliveryStatus === 'pending').map(m => ({
-              text: m.text,
-              sender: m.sender,
-              id: m.id,
-              timestamp: m.timestamp
-            }))
-          });
-          
-          // Find pending message with same text (the optimistic one we added)
-          // Also match by sender to ensure we're replacing the right message
-          const pendingMessage = prev.find(
-            (m) => 
-              m.text === normalizedMessage.text && 
-              m.deliveryStatus === 'pending' &&
-              m.sender === normalizedMessage.sender &&
-              // Match within last 60 seconds
-              Math.abs(new Date(m.timestamp).getTime() - messageTime) < 60000
-          );
-          
-          if (pendingMessage) {
-            // Replace the pending message with the real one from server
-            console.log('[Widget] ✅ Replacing pending message with server message:', normalizedMessage.text, 'ID:', normalizedMessage.id);
-            return prev.map((m) => 
-              m.id === pendingMessage.id
-                ? { 
+        // STEP 2: Replace optimistic message with server echo (real ID)
+        // 2a) Primary: match by temp_id (server broadcasts real id + client's temp_id)
+        const serverTempId = (normalizedMessage as any).temp_id;
+        if (serverTempId && normalizedMessage.id && normalizedMessage.id.startsWith('temp-') === false) {
+          const pendingByTempId = prev.find((m) => m.id === serverTempId);
+          if (pendingByTempId) {
+            console.log('[Widget] ✅ Replacing pending message by temp_id:', serverTempId, '→ real ID:', normalizedMessage.id);
+            return prev.map((m) =>
+              m.id === serverTempId
+                ? {
                     ...normalizedMessage,
-                    sender: m.sender || normalizedMessage.sender, // Preserve original sender
+                    sender: m.sender || normalizedMessage.sender,
                     deliveryStatus: 'delivered' as const,
-                    timestamp: m.timestamp // Keep original timestamp
+                    timestamp: m.timestamp,
                   }
                 : m
             );
-          } else {
-            console.log('[Widget] ❌ No pending message found to replace. Check:', {
-              hasText: !!normalizedMessage.text,
-              textValue: normalizedMessage.text,
-              hasId: !!normalizedMessage.id,
-              idValue: normalizedMessage.id,
-              isTemp: normalizedMessage.id?.startsWith('temp-'),
-              pendingCount: prev.filter(m => m.deliveryStatus === 'pending').length
-            });
           }
-        } else {
-          console.log('[Widget] ⚠️ Cannot match pending message - missing requirements:', {
-            hasId: !!normalizedMessage.id,
-            id: normalizedMessage.id,
-            isTemp: normalizedMessage.id?.startsWith('temp-'),
-            hasText: !!normalizedMessage.text,
-            text: normalizedMessage.text
-          });
+        }
+
+        // 2b) Fallback: match by text + sender + time (for broadcasts without temp_id or older backends)
+        if (normalizedMessage.id &&
+            normalizedMessage.id.startsWith('temp-') === false &&
+            normalizedMessage.text) {
+          const messageTime = new Date(normalizedMessage.timestamp || Date.now()).getTime();
+          const pendingMessage = prev.find(
+            (m) =>
+              m.text === normalizedMessage.text &&
+              m.deliveryStatus === 'pending' &&
+              m.sender === normalizedMessage.sender &&
+              Math.abs(new Date(m.timestamp).getTime() - messageTime) < 60000
+          );
+          if (pendingMessage) {
+            console.log('[Widget] ✅ Replacing pending message with server message (text+sender+time):', normalizedMessage.text, 'ID:', normalizedMessage.id);
+            return prev.map((m) =>
+              m.id === pendingMessage.id
+                ? {
+                    ...normalizedMessage,
+                    sender: m.sender || normalizedMessage.sender,
+                    deliveryStatus: 'delivered' as const,
+                    timestamp: m.timestamp,
+                  }
+                : m
+            );
+          }
         }
 
         // STEP 3: Check for duplicates by text and sender (within 10 seconds)
@@ -808,51 +796,47 @@ export default function EmbedPage() {
     setChatState('active');
     
     try {
-      // Call /webchat/init to create/get conversation
+      // Call /webchat/init with sessionId (session-first flow)
+      // Init returns session_id, visitor_id, ws_token - NOT conversation_id
+      // conversation_id comes later from conversation:created event on session room
       const storedVisitorId = getVisitorId();
-      console.log('[Widget] Initializing conversation...', storedVisitorId ? `(continuing with visitorId: ${storedVisitorId})` : '(new conversation)');
+      const sessionId = presenceSession?.session_id;
+      console.log('[Widget] Initializing session...', {
+        hasVisitorId: !!storedVisitorId,
+        sessionId,
+      });
       
-      const initResult = await apiRef.current.initializeConversation(storedVisitorId || undefined);
+      const initResult = await apiRef.current.initializeConversation(storedVisitorId || undefined, sessionId);
       
       if (!initResult) {
-        throw new Error('Failed to initialize conversation');
+        throw new Error('Failed to initialize session');
       }
       
-      // Check if conversation was closed
+      // Check if previous conversation was closed
       if (initResult.closed_at) {
         console.log('[Widget] Previous conversation was closed, notifying user');
         addSystemMessage('The previous conversation has been closed. Starting a new conversation.');
         setConversationClosed(false); // Reset closed state
       }
       
-      // Switch to conversation room if WebSocket is connected
-      if (wsRef.current && wsRef.current.isConnected() && initResult.conversation_id) {
-        console.log('[Widget] Switching to conversation room:', initResult.conversation_id);
-        wsRef.current.switchToConversationRoom(initResult.conversation_id);
-        
-        // Load message history after switching to conversation room
-        try {
-          const history = await apiRef.current.getConversationMessages(initResult.conversation_id);
-          if (history && history.length > 0) {
-            console.log('[Widget] Loaded', history.length, 'messages from history');
-            const historyMessages: Message[] = history.map((msg: any) => ({
-              id: msg.id,
-              text: msg.message_text || msg.text,
-              sender: (msg.sender_type === 'user' ? 'user' : (msg.sender_type === 'agent' ? 'agent' : 'bot')) as 'user' | 'bot' | 'agent' | 'system',
-              timestamp: msg.created_at || msg.timestamp,
-              deliveryStatus: 'delivered' as const
-            }));
-            setMessages(historyMessages);
-          }
-        } catch (error) {
-          console.warn('[Widget] Failed to load message history:', error);
-        }
+      // Session-first flow: reconnect WebSocket with init's ws_token and join session room
+      // conversation_id will come from conversation:created event
+      if (wsRef.current) {
+        console.log('[Widget] Connecting to session room with init credentials:', initResult.session_id);
+        // Disconnect existing presence connection and reconnect with init's token
+        await wsRef.current.connectPresence(
+          initResult.ws_token,
+          initResult.ws_server_url,
+          initResult.session_id
+        );
+        // Now in session room, waiting for conversation:created event
+        // Message history will be loaded when onConversationCreated callback fires
       }
       
       setIsLoading(false);
     } catch (error) {
-      console.error('[Widget] Failed to initialize conversation:', error);
-      setWsError(error instanceof Error ? error.message : 'Failed to initialize conversation');
+      console.error('[Widget] Failed to initialize session:', error);
+      setWsError(error instanceof Error ? error.message : 'Failed to initialize session');
       setIsLoading(false);
     }
   };
@@ -992,7 +976,7 @@ export default function EmbedPage() {
       // Prefer HTTP API for consistency and reliability
       if (apiRef.current) {
         console.log('[Widget] Sending message via HTTP API');
-        const response = await apiRef.current.sendMessage(messageText);
+        const response = await apiRef.current.sendMessage(messageText, { temp_id: tempId });
         
         // Check if conversation was closed and retried
         if (response.conversationClosed) {
@@ -1025,7 +1009,7 @@ export default function EmbedPage() {
         // The HTTP API might have created/updated a conversation, so we need to join the conversation room
         // to receive meta_message_created events
         // Check for conversation_id in response message or use stored one
-        const conversationId = response.message?.conversation_id || getConversationId();
+        const conversationId = (response.message as { conversation_id?: string } | undefined)?.conversation_id || getConversationId();
         
         if (conversationId && wsRef.current) {
           if (wsRef.current.isConnected()) {
@@ -1042,7 +1026,7 @@ export default function EmbedPage() {
         } else {
           console.warn('[Widget] No conversation ID available after sending message', {
             hasResponseMessage: !!response.message,
-            hasConversationIdInMessage: !!response.message?.conversation_id,
+            hasConversationIdInMessage: !!(response.message as { conversation_id?: string } | undefined)?.conversation_id,
             storedConversationId: getConversationId(),
           });
         }
@@ -1051,7 +1035,7 @@ export default function EmbedPage() {
       } else if (wsRef.current && (isConnected || wsRef.current.isConnected())) {
         // Fallback to WebSocket if HTTP API is not available
         console.warn('[Widget] HTTP API not available, using WebSocket fallback');
-        await wsRef.current.sendMessage(messageText);
+        await wsRef.current.sendMessage(messageText, tempId);
         // Message will be updated when WebSocket receives meta_message_created event
       } else {
         throw new Error('No connection available. Please try again.');

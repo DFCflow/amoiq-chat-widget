@@ -41,6 +41,7 @@ export interface UserInfo {
 export interface SendMessageOptions {
   userId?: string; // For logged-in users
   userInfo?: UserInfo; // User information for logged-in users
+  temp_id?: string; // Client-generated temp id for optimistic message replacement
 }
 
 export interface OnlineUser {
@@ -300,6 +301,11 @@ export class ChatAPI {
         payload.sender_name = senderName;
       }
 
+      // Add temp_id for optimistic message replacement (server echoes in meta_message_created)
+      if (options?.temp_id) {
+        payload.temp_id = options.temp_id;
+      }
+
       // Retry logic for production
       let lastError: Error | null = null;
       const maxRetries = 3;
@@ -441,8 +447,8 @@ export class ChatAPI {
    * Initialize conversation and get JWT token for WebSocket connection
    * This is the new flow per Gateway plan: POST /webchat/init
    */
-  async initializeConversation(visitorId?: string): Promise<{
-    conversation_id: string;
+  async initializeConversation(visitorId?: string, sessionId?: string): Promise<{
+    session_id: string;
     visitor_id: string;
     ws_token: string;
     ws_server_url: string;
@@ -463,6 +469,13 @@ export class ChatAPI {
       // Only add tenantId if available - Gateway will resolve from domain if not provided
       if (this.tenantId) {
         payload.tenantId = this.tenantId;
+      }
+
+      // Add sessionId when available (session-first flow)
+      // Priority: passed sessionId > sessionInfo.sessionId
+      const effectiveSessionId = sessionId || sessionInfo.sessionId;
+      if (effectiveSessionId) {
+        payload.sessionId = effectiveSessionId;
       }
 
       // Add visitorId if provided (for returning users)

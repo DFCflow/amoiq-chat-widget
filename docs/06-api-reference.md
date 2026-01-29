@@ -53,6 +53,7 @@ Content-Type: application/json
   "tenantId": "tenant-123",
   "sessionId": "session-789-abc123",
   "fingerprint": "a1b2c3d4e5f6g7h8",
+  "temp_id": "temp-1738...",         // Optional: Client-generated id for optimistic message replacement; server echoes in meta_message_created
   "userId": "user-456",              // Optional: If present = logged-in user
   "userInfo": {                      // Optional: Only for logged-in users
     "name": "John Doe",

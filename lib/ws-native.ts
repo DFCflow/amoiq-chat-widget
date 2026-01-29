@@ -44,7 +44,7 @@ export interface UserInfo {
 }
 
 export interface ConversationInitResponse {
-  conversation_id: string;
+  session_id: string;
   visitor_id: string;
   ws_token: string;
   ws_server_url: string;
@@ -595,7 +595,7 @@ export class ChatWebSocketNative {
    * Initialize conversation and get JWT token and Socket.IO server URL
    * Must be called before connect()
    */
-  async initialize(visitorId?: string): Promise<ConversationInitResponse | null> {
+  async initialize(visitorId?: string, sessionId?: string): Promise<ConversationInitResponse | null> {
     try {
       const sessionInfo = getSessionInfo();
       
@@ -615,6 +615,13 @@ export class ChatWebSocketNative {
       // Only add tenantId if available - Gateway will resolve from domain if not provided
       if (this.tenantId) {
         payload.tenantId = this.tenantId;
+      }
+
+      // Add sessionId when available (session-first flow)
+      // Priority: passed sessionId > presenceSessionId > sessionInfo.sessionId
+      const effectiveSessionId = sessionId || this.presenceSessionId || sessionInfo.sessionId;
+      if (effectiveSessionId) {
+        payload.sessionId = effectiveSessionId;
       }
 
       if (storedVisitorId) {
@@ -665,14 +672,15 @@ export class ChatWebSocketNative {
       
       // Check if conversation is closed
       if (data.closed_at) {
-        console.log('[Socket.IO] Conversation is closed (closed_at:', data.closed_at, '), clearing stored conversation data');
+        console.log('[Socket.IO] Session has closed conversation (closed_at:', data.closed_at, '), clearing stored conversation data');
         // Clear stored conversation data since it's closed
         clearConversation();
-        // Don't store the closed conversation's IDs - user should start a new conversation
-        // But we still need the token and connection info for the new conversation
+        // But we still need the token and connection info for new conversation
       }
       
-      this.conversationId = data.conversation_id;
+      // Session-first flow: init returns session_id, NOT conversation_id
+      // conversation_id will come from conversation:created event on session room
+      this.presenceSessionId = data.session_id;
       this.visitorId = data.visitor_id;
       this.wsToken = data.ws_token;
       this.wsServerUrl = data.ws_server_url;
@@ -681,13 +689,8 @@ export class ChatWebSocketNative {
       const expiresInMs = (data.expires_in || 900) * 1000; // Default 15 minutes (900s) if not provided
       this.tokenExpiresAt = Date.now() + expiresInMs;
       
-      // Only store conversation ID and visitor ID if conversation is NOT closed
-      if (!data.closed_at) {
-        setConversationId(data.conversation_id, data.visitor_id);
-      } else {
-        // Conversation is closed - don't persist it, user will get a new one on next message
-        console.log('[Socket.IO] Not storing closed conversation IDs - new conversation will be created on next message');
-      }
+      // Note: Do NOT call setConversationId() here - conversation_id comes later
+      // from conversation:created event on session room
       
       // Schedule proactive token refresh (refresh at 80% of expiration time)
       this.scheduleTokenRefresh(expiresInMs * 0.8);
@@ -803,7 +806,7 @@ export class ChatWebSocketNative {
         expires_in: data.expires_in,
       });
       console.log('[Socket.IO] DEBUG - Init response data:', {
-        conversation_id: data.conversation_id,
+        session_id: data.session_id,
         visitor_id: data.visitor_id,
         tenant_id: data.tenant_id,
         tenant_id_type: typeof data.tenant_id,
@@ -1046,16 +1049,19 @@ export class ChatWebSocketNative {
         });
         this.reconnectAttempts = 0;
         
-        // Join conversation room if we have conversationId
-        // If we're already in a session room, switchToConversationRoom will handle it
+        // Session-first flow: join session room first, wait for conversation:created
         if (this.conversationId && this.socket) {
+          // If we already have conversationId (e.g. from conversation:created), join conversation room
           console.log('[Socket.IO] Joining conversation room:', this.conversationId);
           this.switchToConversationRoom(this.conversationId);
         } else if (this.presenceSessionId && this.socket) {
-          // If we have presence session but no conversation yet, stay in session room
-          console.log('[Socket.IO] Staying in session room, waiting for conversation_id');
+          // No conversationId yet - join session room and wait for conversation:created event
+          const roomName = `session:${this.presenceSessionId}`;
+          console.log('[Socket.IO] Joining session room:', roomName);
+          this.socket.emit('join:session', { sessionId: this.presenceSessionId });
+          this.currentRoom = roomName;
         } else {
-          console.warn('[Socket.IO] WARNING - Cannot join conversation room:', {
+          console.warn('[Socket.IO] WARNING - Cannot join any room:', {
             has_conversation_id: !!this.conversationId,
             has_socket: !!this.socket,
             has_presence_session: !!this.presenceSessionId,
@@ -1229,8 +1235,9 @@ export class ChatWebSocketNative {
   /**
    * Send a message through Socket.IO
    * Message is pushed to Redis stream chat_incoming
+   * @param tempId - Optional client-generated temp id for optimistic message replacement (server echoes in meta_message_created)
    */
-  async sendMessage(text: string): Promise<void> {
+  async sendMessage(text: string, tempId?: string): Promise<void> {
     if (typeof window === 'undefined') {
       throw new Error('Socket.IO is only available in the browser');
     }
@@ -1316,6 +1323,11 @@ export class ChatWebSocketNative {
     const senderName = getSenderName();
     if (senderName) {
       message.sender_name = senderName;
+    }
+
+    // Add temp_id for optimistic message replacement (server echoes in meta_message_created)
+    if (tempId) {
+      message.temp_id = tempId;
     }
 
     // Debug logging - show complete message payload
