@@ -2,9 +2,20 @@
   display: flex;
   flex-direction: column;
   height: 100vh;
-  width: 100%;
+  width: min(100vw, 380px);
+  max-width: 100%;
+  box-sizing: border-box;
   background: #ffffff;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+}
+
+/* iOS: keep widget centered when keyboard opens/closes (viewport resizes) */
+@supports (-webkit-touch-callout: none) {
+  .container {
+    position: fixed;
+    left: 50%;
+    transform: translateX(-50%);
+  }
 }
 
 .header {

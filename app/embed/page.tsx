@@ -120,6 +120,7 @@ export default function EmbedPage() {
   const [nameInputValue, setNameInputValue] = useState('');
   const [showClearButton, setShowClearButton] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
   const wsRef = useRef<ChatWebSocketNative | null>(null);
   const apiRef = useRef<ChatAPI | null>(null);
 
@@ -825,6 +826,37 @@ export default function EmbedPage() {
     return () => clearInterval(interval);
   }, [messages]);
 
+  // Lock widget width on iOS when keyboard opens; only recalc when keyboard is closed
+  useEffect(() => {
+    if (typeof window === 'undefined' || !containerRef.current) return;
+    let baseWidth = window.innerWidth;
+    const applyWidth = () => {
+      const target = containerRef.current;
+      if (target) target.style.width = `${baseWidth}px`;
+    };
+    const handleViewportChange = () => {
+      const vv = window.visualViewport;
+      const isKeyboard = vv ? vv.height < window.innerHeight : false;
+      if (!isKeyboard) {
+        baseWidth = window.innerWidth;
+        applyWidth();
+      }
+    };
+    applyWidth();
+    window.addEventListener('resize', handleViewportChange);
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener('resize', handleViewportChange);
+      window.visualViewport.addEventListener('scroll', handleViewportChange);
+    }
+    return () => {
+      window.removeEventListener('resize', handleViewportChange);
+      if (window.visualViewport) {
+        window.visualViewport.removeEventListener('resize', handleViewportChange);
+        window.visualViewport.removeEventListener('scroll', handleViewportChange);
+      }
+    };
+  }, [isLoading]);
+
   const handleSend = async () => {
     if (!inputValue.trim()) return;
 
@@ -966,7 +998,7 @@ export default function EmbedPage() {
 
   if (isLoading) {
     return (
-      <div className={styles.container}>
+      <div ref={containerRef} className={styles.container}>
         <div className={styles.loading}>Connecting...</div>
       </div>
     );
@@ -976,7 +1008,7 @@ export default function EmbedPage() {
   // No need to block rendering if tenantId is missing - Gateway will handle it
 
   return (
-    <div className={styles.container}>
+    <div ref={containerRef} className={styles.container}>
       <div className={styles.header}>
         <h3 className={styles.title}>Chat Support</h3>
         {showClearButton && messages.length > 0 && (
