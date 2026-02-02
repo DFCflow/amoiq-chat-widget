@@ -21,6 +21,10 @@ export interface SendMessageResponse {
   message?: Message;
   error?: string;
   conversationClosed?: boolean; // Indicates if conversation was closed and retried
+  // DB-first flow: Real IDs from backend (202 response)
+  message_id?: string; // Real message UUID from webchat_messages table
+  conversation_id?: string; // Conversation UUID
+  stream_id?: string; // Redis stream entry ID (for backward compatibility)
 }
 
 export interface WebsiteInfo {
@@ -382,10 +386,20 @@ export class ChatAPI {
             }
           }
 
+          // DB-first flow: Extract message_id from 202 response
+          // Backend returns: { code: 'ACCEPTED', message: '...', data: { message_id, conversation_id, stream_id } }
+          const messageId = data.data?.message_id || data.message_id;
+          const conversationId = data.data?.conversation_id || data.conversation_id;
+          const streamId = data.data?.stream_id || data.stream_id;
+          
           return {
             success: true,
             message: data.message,
             conversationClosed: wasClosed || retriedDueToClosed,
+            // DB-first flow fields
+            message_id: messageId,
+            conversation_id: conversationId,
+            stream_id: streamId,
           };
         } catch (error) {
           lastError = error instanceof Error ? error : new Error('Unknown error');

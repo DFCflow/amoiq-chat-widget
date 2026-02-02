@@ -926,9 +926,18 @@ export default function EmbedPage() {
           throw new Error(response.error || 'Failed to send message');
         }
 
-        // If API returns a message with ID, update the temp message
-        // Keep as 'pending' - will be marked 'delivered' when WebSocket receives meta_message_created event
-        if (response.message && response.message.id) {
+        // DB-first flow: If API returns message_id (202 response), replace temp id with real id
+        // This allows WebSocket to match by the same id when Worker broadcasts
+        const realMessageId = response.message_id;
+        if (realMessageId) {
+          setMessages((prev) => prev.map((m) => 
+            m.id === tempId 
+              ? { ...m, id: realMessageId } 
+              : m
+          ));
+        } else if (response.message && response.message.id) {
+          // Legacy fallback: If API returns a message with ID, update the temp message
+          // Keep as 'pending' - will be marked 'delivered' when WebSocket receives meta_message_created event
           setMessages((prev) => {
             const filtered = prev.filter((m) => m.id !== tempId);
             return [...filtered, {
