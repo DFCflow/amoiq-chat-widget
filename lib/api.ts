@@ -340,7 +340,7 @@ export class ChatAPI {
                                          errorText.toLowerCase().includes('conversation closed') ||
                                          response.status === 410; // 410 Gone often used for closed resources
             
-            if (isClosedConversation && conversationId) {
+            if (isClosedConversation && payload.conversation_id) {
               // Conversation is closed - clear stored conversation data
               clearConversation();
               
