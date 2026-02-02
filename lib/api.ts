@@ -359,9 +359,9 @@ export class ChatAPI {
             if (response.status >= 400 && response.status < 500) {
               throw new Error(`Failed to send message: ${response.status} ${response.statusText} - ${errorText}`);
             }
-            
-            // Retry on server errors (5xx)
-            throw new Error(`Server error: ${response.status} ${response.statusText}`);
+            // Server errors (5xx): include response body so backend message is visible
+            const serverMsg = errorText?.trim() ? ` - ${errorText}` : '';
+            throw new Error(`Server error: ${response.status} ${response.statusText}${serverMsg}`);
           }
 
           const data = await response.json();

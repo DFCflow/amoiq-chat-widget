@@ -126,6 +126,8 @@ export default function EmbedPage() {
   const containerRef = useRef<HTMLDivElement>(null);
   const wsRef = useRef<ChatWebSocketNative | null>(null);
   const apiRef = useRef<ChatAPI | null>(null);
+  /** Ref for presence session so open-chat handler can read it without stale state closure */
+  const presenceSessionRef = useRef<{ session_id: string; ws_token: string; websocket_url: string } | null>(null);
 
   /**
    * Get website info from parent window or detect from current context
@@ -562,15 +564,17 @@ export default function EmbedPage() {
       
       if (!presenceResponse) {
         console.error('[Widget] Failed to create presence session');
+        presenceSessionRef.current = null;
         return;
       }
-      
-      
-      setPresenceSession({
+
+      const session = {
         session_id: presenceResponse.session_id,
         ws_token: presenceResponse.ws_token,
         websocket_url: presenceResponse.websocket_url,
-      });
+      };
+      presenceSessionRef.current = session;
+      setPresenceSession(session);
       
       // Connect to presence WebSocket
       if (wsRef.current) {
@@ -635,33 +639,30 @@ export default function EmbedPage() {
       }
     } catch (error) {
       console.error('[Widget] Error initializing presence session:', error);
+      presenceSessionRef.current = null;
     }
   };
 
   // Handle chat bubble click
   const handleChatBubbleClick = async () => {
-    // Wait for presence session if it's still initializing
-    if (!presenceSession) {
-      // Wait up to 5 seconds for presence session
-      let attempts = 0;
-      while (!presenceSession && attempts < 50) {
-        await new Promise(resolve => setTimeout(resolve, 100));
-        attempts++;
-      }
-      if (!presenceSession) {
-        console.error('[Widget] Cannot open chat: presence session initialization timeout');
-        return;
-      }
+    // Wait for presence session if still initializing (use ref so we see updates; state would be stale in this callback)
+    const PRESENCE_WAIT_MS = 8000;
+    const STEP_MS = 100;
+    let waited = 0;
+    while (!presenceSessionRef.current && waited < PRESENCE_WAIT_MS) {
+      await new Promise(resolve => setTimeout(resolve, STEP_MS));
+      waited += STEP_MS;
     }
-    
-    if (!apiRef.current || !presenceSession) {
-      console.warn('[Widget] Cannot open chat: presence session not initialized');
+
+    const session = presenceSessionRef.current;
+    if (!apiRef.current || !session) {
+      console.error('[Widget] Cannot open chat: presence session initialization timeout or failed. Check network and API key.');
       return;
     }
-    
+
     try {
       // Call /webchat/open endpoint
-      const opened = await apiRef.current.openChat(presenceSession.session_id);
+      const opened = await apiRef.current.openChat(session.session_id);
       if (!opened) {
         console.error('[Widget] Failed to open chat');
         return;
@@ -712,7 +713,7 @@ export default function EmbedPage() {
       // Init returns session_id, visitor_id, ws_token - NOT conversation_id
       // conversation_id comes later from conversation:created event on session room
       const storedVisitorId = getVisitorId();
-      const sessionId = presenceSession?.session_id;
+      const sessionId = presenceSessionRef.current?.session_id;
       
       const initResult = await apiRef.current.initializeConversation(storedVisitorId || undefined, sessionId);
       
