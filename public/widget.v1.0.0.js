@@ -102,9 +102,13 @@
     
     container.appendChild(bubble);
 
+    // Detect mobile
+    var isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) || window.innerWidth <= 768;
+
     // Create iframe (hidden initially)
     const iframe = document.createElement('iframe');
     iframe.id = 'amoiq-widget-iframe';
+    iframe.setAttribute('allow', 'microphone; camera');
     const baseUrl = config.baseUrl || getBaseUrl();
     
     // Build URL with tenantId (if provided) and website info
@@ -130,15 +134,34 @@
     }
     
     iframe.src = `${baseUrl}/embed?${urlParams.toString()}`;
-    iframe.style.cssText = `
-      width: 380px;
-      height: 600px;
-      border: none;
-      border-radius: 12px;
-      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
-      display: none;
-      background: white;
-    `;
+
+    if (isMobile) {
+      // Fullscreen on mobile — app-like experience
+      iframe.style.cssText = `
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        border: none;
+        border-radius: 0;
+        box-shadow: none;
+        display: none;
+        background: white;
+        z-index: 999999;
+      `;
+    } else {
+      // Desktop: normal popup widget
+      iframe.style.cssText = `
+        width: 380px;
+        height: 600px;
+        border: none;
+        border-radius: 12px;
+        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+        display: none;
+        background: white;
+      `;
+    }
     container.appendChild(iframe);
 
     let isOpen = false;
@@ -165,6 +188,13 @@
         bubble.style.display = 'none';
         hideNewMessageBadge();
         iframe.focus();
+        // On mobile: prevent body scroll when chat is open
+        if (isMobile) {
+          document.body.style.overflow = 'hidden';
+          document.body.style.position = 'fixed';
+          document.body.style.width = '100%';
+          document.body.style.height = '100%';
+        }
         // Notify iframe that chat is now open (for WebSocket initialization)
         if (iframe.contentWindow) {
           iframe.contentWindow.postMessage({ type: 'amoiq-widget-open' }, '*');
@@ -172,6 +202,13 @@
       } else {
         iframe.style.display = 'none';
         bubble.style.display = 'flex';
+        // Restore body scroll on mobile
+        if (isMobile) {
+          document.body.style.overflow = '';
+          document.body.style.position = '';
+          document.body.style.width = '';
+          document.body.style.height = '';
+        }
       }
     }
 

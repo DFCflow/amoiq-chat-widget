@@ -124,10 +124,19 @@ export default function EmbedPage() {
   const [showClearButton, setShowClearButton] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
   const wsRef = useRef<ChatWebSocketNative | null>(null);
   const apiRef = useRef<ChatAPI | null>(null);
   /** Ref for presence session so open-chat handler can read it without stale state closure */
   const presenceSessionRef = useRef<{ session_id: string; ws_token: string; websocket_url: string } | null>(null);
+
+  // Swipe-right-to-close state
+  const swipeRef = useRef<{ startX: number; startY: number; swiping: boolean; translateX: number }>({
+    startX: 0,
+    startY: 0,
+    swiping: false,
+    translateX: 0,
+  });
 
   /**
    * Get website info from parent window or detect from current context
@@ -830,6 +839,121 @@ export default function EmbedPage() {
     return () => clearInterval(interval);
   }, [messages]);
 
+  // Prevent body/document scroll and zoom on mobile — only messages area should scroll
+  useEffect(() => {
+    // Prevent pinch zoom
+    const preventZoom = (e: TouchEvent) => {
+      if (e.touches.length > 1) {
+        e.preventDefault();
+      }
+    };
+    // Prevent scroll on container — only the messages div should scroll
+    const preventScroll = (e: TouchEvent) => {
+      const target = e.target as HTMLElement;
+      // Allow scrolling inside the messages container
+      if (messagesContainerRef.current?.contains(target)) {
+        return;
+      }
+      // Prevent scrolling everywhere else
+      e.preventDefault();
+    };
+
+    document.addEventListener('touchmove', preventZoom, { passive: false });
+    document.addEventListener('touchmove', preventScroll, { passive: false });
+    // Also prevent double-tap zoom
+    let lastTouchEnd = 0;
+    const preventDoubleTapZoom = (e: TouchEvent) => {
+      const now = Date.now();
+      if (now - lastTouchEnd <= 300) {
+        e.preventDefault();
+      }
+      lastTouchEnd = now;
+    };
+    document.addEventListener('touchend', preventDoubleTapZoom, { passive: false });
+
+    return () => {
+      document.removeEventListener('touchmove', preventZoom);
+      document.removeEventListener('touchmove', preventScroll);
+      document.removeEventListener('touchend', preventDoubleTapZoom);
+    };
+  }, []);
+
+  // Swipe right to close gesture
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    const SWIPE_THRESHOLD = 100; // px to trigger close
+    const MAX_TRANSLATE = 300;
+
+    const handleTouchStart = (e: TouchEvent) => {
+      const touch = e.touches[0];
+      // Only start swipe from left edge (within 40px)
+      if (touch.clientX > 40) return;
+      swipeRef.current.startX = touch.clientX;
+      swipeRef.current.startY = touch.clientY;
+      swipeRef.current.swiping = false;
+      swipeRef.current.translateX = 0;
+    };
+
+    const handleTouchMove = (e: TouchEvent) => {
+      const touch = e.touches[0];
+      const deltaX = touch.clientX - swipeRef.current.startX;
+      const deltaY = Math.abs(touch.clientY - swipeRef.current.startY);
+
+      // Only horizontal swipe (right direction), ignore if mostly vertical
+      if (deltaX > 10 && deltaX > deltaY * 1.5) {
+        swipeRef.current.swiping = true;
+        const translate = Math.min(deltaX, MAX_TRANSLATE);
+        swipeRef.current.translateX = translate;
+        container.style.transform = `translateX(${translate}px)`;
+        container.style.transition = 'none';
+        // Add slight opacity fade
+        container.style.opacity = `${1 - (translate / MAX_TRANSLATE) * 0.3}`;
+      }
+    };
+
+    const handleTouchEnd = () => {
+      if (!swipeRef.current.swiping) return;
+
+      const translate = swipeRef.current.translateX;
+      container.style.transition = 'transform 0.3s cubic-bezier(0.25, 0.46, 0.45, 0.94), opacity 0.3s ease';
+
+      if (translate >= SWIPE_THRESHOLD) {
+        // Swipe far enough — animate out and close
+        container.style.transform = `translateX(100%)`;
+        container.style.opacity = '0';
+        setTimeout(() => {
+          handleClose();
+          // Reset after close
+          container.style.transform = '';
+          container.style.opacity = '';
+          container.style.transition = '';
+        }, 300);
+      } else {
+        // Not far enough — snap back
+        container.style.transform = '';
+        container.style.opacity = '';
+        setTimeout(() => {
+          container.style.transition = '';
+        }, 300);
+      }
+
+      swipeRef.current.swiping = false;
+      swipeRef.current.translateX = 0;
+    };
+
+    container.addEventListener('touchstart', handleTouchStart, { passive: true });
+    container.addEventListener('touchmove', handleTouchMove, { passive: true });
+    container.addEventListener('touchend', handleTouchEnd, { passive: true });
+
+    return () => {
+      container.removeEventListener('touchstart', handleTouchStart);
+      container.removeEventListener('touchmove', handleTouchMove);
+      container.removeEventListener('touchend', handleTouchEnd);
+    };
+  }, []);
+
   // Lock widget width on iOS when keyboard opens; only recalc when keyboard is closed
   useEffect(() => {
     if (typeof window === 'undefined' || !containerRef.current) return;
@@ -1093,7 +1217,7 @@ export default function EmbedPage() {
         </div>
       </div>
 
-      <div className={styles.messages}>
+      <div ref={messagesContainerRef} className={styles.messages}>
         {messages.length === 0 ? (
           <div className={styles.emptyState}>
             <p>Start a conversation</p>

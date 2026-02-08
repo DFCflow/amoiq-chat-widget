@@ -2,19 +2,42 @@
   display: flex;
   flex-direction: column;
   height: 100vh;
+  height: 100dvh; /* Dynamic viewport height - accounts for mobile browser chrome */
   width: min(100vw, 380px);
   max-width: 100%;
   box-sizing: border-box;
   background: #ffffff;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  overflow: hidden;
+  /* Safe area insets for notch devices */
+  padding-top: env(safe-area-inset-top);
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
+  touch-action: pan-y; /* Only allow vertical touch actions */
+  overscroll-behavior: none;
+  /* Swipe transition */
+  transition: transform 0.3s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+  will-change: transform;
 }
 
 /* iOS: keep widget centered when keyboard opens/closes (viewport resizes) */
 @supports (-webkit-touch-callout: none) {
   .container {
     position: fixed;
-    left: 50%;
-    transform: translateX(-50%);
+    left: 0;
+    right: 0;
+    top: 0;
+    bottom: 0;
+    width: 100%;
+    max-width: 380px;
+    /* Center on larger screens */
+    margin: 0 auto;
+    transform: none;
   }
 }
 
@@ -26,6 +49,11 @@
   border-bottom: 1px solid #e5e7eb;
   background: #ffffff;
   position: relative;
+  flex-shrink: 0;
+  z-index: 10;
+  /* Prevent text selection on swipe */
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .title {
@@ -97,11 +125,16 @@
 .messages {
   flex: 1;
   overflow-y: auto;
+  overflow-x: hidden;
   padding: 16px;
   display: flex;
   flex-direction: column;
   gap: 12px;
   background: #f9fafb;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-y: contain; /* Prevent scroll chaining to parent */
+  touch-action: pan-y; /* Allow vertical scroll only inside messages */
+  min-height: 0; /* Fix flex shrinking */
 }
 
 .emptyState {
@@ -210,8 +243,12 @@
   display: flex;
   gap: 8px;
   padding: 16px;
+  /* Safe area bottom padding for address bar / home indicator */
+  padding-bottom: calc(16px + env(safe-area-inset-bottom));
   border-top: 1px solid #e5e7eb;
   background: #ffffff;
+  flex-shrink: 0;
+  z-index: 10;
 }
 
 .input {
@@ -219,9 +256,11 @@
   padding: 12px 16px;
   border: 1px solid #d1d5db;
   border-radius: 24px;
-  font-size: 14px;
+  font-size: 16px; /* 16px prevents iOS auto-zoom on focus */
   outline: none;
   transition: border-color 0.2s;
+  /* Prevent zoom on input focus */
+  -webkit-text-size-adjust: 100%;
 }
 
 .input:focus {
@@ -290,6 +329,7 @@
   align-items: center;
   justify-content: center;
   height: 100vh;
+  height: 100dvh;
   color: #6b7280;
   font-size: 14px;
 }
@@ -298,3 +338,21 @@
   color: #ef4444;
 }
 
+/* Swipe overlay hint - shows when swiping right */
+.swipeOverlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: 4px;
+  background: linear-gradient(to right, rgba(0,0,0,0.08), transparent);
+  pointer-events: none;
+  z-index: 100;
+  opacity: 0;
+  transition: opacity 0.2s, width 0.2s;
+}
+
+.swipeOverlayActive {
+  opacity: 1;
+  width: 20px;
+}
