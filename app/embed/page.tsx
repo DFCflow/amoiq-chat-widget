@@ -18,10 +18,101 @@ interface Message {
   sender: 'user' | 'bot' | 'agent' | 'system';
   timestamp: string;
   deliveryStatus?: 'pending' | 'delivered' | 'failed';
+  attachments?: AttachmentItem[];
+  sender_type?: string;
+}
+
+interface AttachmentItem {
+  type?: 'image' | 'video' | 'audio' | 'document' | string;
+  payload?: {
+    url?: string;
+    filename?: string;
+    content_type?: string;
+    size?: number;
+  };
+  url?: string;
+  filename?: string;
+  content_type?: string;
+  size?: number;
 }
 
 const MESSAGES_STORAGE_KEY = 'chat_messages';
 const MESSAGES_STORAGE_VERSION = '1';
+
+function normalizeAttachments(input: unknown): AttachmentItem[] | undefined {
+  if (!input) return undefined;
+
+  let rawAttachments = input;
+  if (typeof rawAttachments === 'string') {
+    try {
+      rawAttachments = JSON.parse(rawAttachments);
+    } catch {
+      return undefined;
+    }
+  }
+
+  const items = Array.isArray(rawAttachments)
+    ? rawAttachments
+    : (rawAttachments as { items?: unknown[] })?.items;
+
+  if (!Array.isArray(items) || items.length === 0) {
+    return undefined;
+  }
+
+  const normalizedItems = items
+    .map((item) => {
+      if (!item || typeof item !== 'object') return null;
+
+      const attachment = item as AttachmentItem;
+      const payload = attachment.payload && typeof attachment.payload === 'object' ? attachment.payload : {};
+      const url = attachment.url || payload.url;
+      if (!url) return null;
+
+      return {
+        ...attachment,
+        payload: {
+          ...payload,
+          url,
+          filename: attachment.filename || payload.filename,
+          content_type: attachment.content_type || payload.content_type,
+          size: attachment.size || payload.size,
+        },
+      };
+    })
+    .filter((item) => item !== null);
+
+  return normalizedItems;
+}
+
+function normalizeMessage<T extends Message | Record<string, any>>(message: T): Message {
+  return {
+    ...(message as Message),
+    attachments: normalizeAttachments((message as Record<string, any>).attachments),
+  };
+}
+
+function getAttachmentUrl(attachment: AttachmentItem): string | undefined {
+  return attachment.payload?.url || attachment.url;
+}
+
+function getAttachmentFilename(attachment: AttachmentItem): string {
+  return attachment.payload?.filename || attachment.filename || 'Attachment';
+}
+
+function getAttachmentContentType(attachment: AttachmentItem): string | undefined {
+  return attachment.payload?.content_type || attachment.content_type;
+}
+
+function getAttachmentType(attachment: AttachmentItem): string {
+  if (attachment.type) return attachment.type;
+
+  const contentType = getAttachmentContentType(attachment);
+  if (!contentType) return 'document';
+  if (contentType.startsWith('image/')) return 'image';
+  if (contentType.startsWith('video/')) return 'video';
+  if (contentType.startsWith('audio/')) return 'audio';
+  return 'document';
+}
 
 // Save messages to localStorage
 function saveMessagesToStorage(messages: Message[], lastUserMessageAt?: number): void {
@@ -88,7 +179,7 @@ function loadMessagesFromStorage(): Message[] {
         return [];
       }
       
-      return data.messages;
+      return data.messages.map((message: Message) => normalizeMessage(message));
     }
     return [];
   } catch (error) {
@@ -297,7 +388,7 @@ export default function EmbedPage() {
       setMessages((prev) => {
         // Normalize message format - ensure sender type is consistent
         // Handle different server formats (sender_type, sender, etc.)
-        let normalizedMessage = { ...message };
+        let normalizedMessage = normalizeMessage({ ...message });
         
         // Map messageId/message_id to id if present (server sends messageId or message_id, we expect id)
         // Priority: message_id (from message:new) > messageId (from meta_message_created) > id
@@ -313,6 +404,7 @@ export default function EmbedPage() {
         } else if (!normalizedMessage.text && message.text) {
           normalizedMessage.text = message.text;
         }
+        normalizedMessage.attachments = normalizeAttachments(message.attachments) || normalizedMessage.attachments;
         
         // Map temp_id / client_temp_id for optimistic message replacement (server echoes client temp_id in meta_message_created)
         const tempIdFromServer = (message as any).temp_id ?? (message as any).client_temp_id;
@@ -800,7 +892,9 @@ export default function EmbedPage() {
         // Merge with existing messages (from cache) to avoid duplicates
         setMessages((prev) => {
           const existingIds = new Set(prev.map(m => m.id));
-          const newMessages = history.filter(m => !existingIds.has(m.id));
+          const newMessages = history
+            .map((message) => normalizeMessage(message))
+            .filter(m => !existingIds.has(m.id));
           // Sort by timestamp
           const allMessages = [...prev, ...newMessages].sort(
             (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
@@ -1280,7 +1374,73 @@ export default function EmbedPage() {
                   message.sender === 'user' ? styles.messageUser : styles.messageBot
                 }`}
               >
-                <div className={styles.messageContent}>{message.text}</div>
+                <div className={styles.messageBubble}>
+                  {message.text ? (
+                    <div className={styles.messageContent}>{message.text}</div>
+                  ) : null}
+                  {message.attachments?.length ? (
+                    <div className={styles.attachments}>
+                      {message.attachments.map((attachment, index) => {
+                        const url = getAttachmentUrl(attachment);
+                        if (!url) return null;
+
+                        const attachmentType = getAttachmentType(attachment);
+                        const filename = getAttachmentFilename(attachment);
+
+                        if (attachmentType === 'image') {
+                          return (
+                            <a
+                              key={`${message.id}-attachment-${index}`}
+                              href={url}
+                              target="_blank"
+                              rel="noreferrer"
+                              className={styles.attachmentLink}
+                            >
+                              <img src={url} alt={filename} className={styles.attachmentImage} />
+                            </a>
+                          );
+                        }
+
+                        if (attachmentType === 'video') {
+                          return (
+                            <video
+                              key={`${message.id}-attachment-${index}`}
+                              className={styles.attachmentVideo}
+                              src={url}
+                              controls
+                              preload="metadata"
+                            />
+                          );
+                        }
+
+                        if (attachmentType === 'audio') {
+                          return (
+                            <audio
+                              key={`${message.id}-attachment-${index}`}
+                              className={styles.attachmentAudio}
+                              src={url}
+                              controls
+                              preload="metadata"
+                            />
+                          );
+                        }
+
+                        return (
+                          <a
+                            key={`${message.id}-attachment-${index}`}
+                            href={url}
+                            target="_blank"
+                            rel="noreferrer"
+                            className={styles.attachmentCard}
+                          >
+                            <span className={styles.attachmentCardIcon}>📎</span>
+                            <span className={styles.attachmentCardName}>{filename}</span>
+                          </a>
+                        );
+                      })}
+                    </div>
+                  ) : null}
+                </div>
                 <div className={styles.messageMeta}>
                   <div className={styles.messageTime}>
                     {new Date(message.timestamp).toLocaleTimeString([], {
