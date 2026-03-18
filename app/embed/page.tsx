@@ -414,7 +414,11 @@ export default function EmbedPage() {
         normalizedMessage.attachments = normalizeAttachments(message.attachments) || normalizedMessage.attachments;
         
         // Map temp_id / client_temp_id for optimistic message replacement (server echoes client temp_id in meta_message_created)
-        const tempIdFromServer = (message as any).temp_id ?? (message as any).client_temp_id;
+        const tempIdFromServer =
+          (message as any).temp_id ??
+          (message as any).client_temp_id ??
+          (message as any).metadata?.temp_id ??
+          (normalizedMessage as any).metadata?.temp_id;
         if (tempIdFromServer) {
           (normalizedMessage as any).temp_id = tempIdFromServer;
         }
@@ -487,7 +491,24 @@ export default function EmbedPage() {
             return false;
           });
           if (existingById) {
-            return prev; // Don't add duplicate
+            return prev.map((m) => {
+              const matchesById =
+                m.id === messageId ||
+                (m as any).message_id === messageId ||
+                ((message as any).message_id && m.id === (message as any).message_id);
+
+              if (!matchesById) {
+                return m;
+              }
+
+              return {
+                ...m,
+                ...normalizedMessage,
+                text: normalizedMessage.text || m.text,
+                attachments: normalizedMessage.attachments?.length ? normalizedMessage.attachments : m.attachments,
+                deliveryStatus: normalizedMessage.deliveryStatus || (m.deliveryStatus === 'pending' ? 'delivered' : m.deliveryStatus),
+              };
+            });
           }
         }
 
@@ -544,13 +565,16 @@ export default function EmbedPage() {
         // 2b) Fallback: match by text + sender + time (for broadcasts without temp_id or older backends)
         if (normalizedMessage.id &&
             normalizedMessage.id.startsWith('temp-') === false &&
-            normalizedMessage.text) {
+            (normalizedMessage.text || normalizedMessage.attachments?.length)) {
           const messageTime = new Date(normalizedMessage.timestamp || Date.now()).getTime();
           const pendingMessage = prev.find(
             (m) =>
-              m.text === normalizedMessage.text &&
               m.deliveryStatus === 'pending' &&
               m.sender === normalizedMessage.sender &&
+              (
+                (normalizedMessage.text && m.text === normalizedMessage.text) ||
+                (!normalizedMessage.text && normalizedMessage.attachments?.length && !!m.attachments?.length)
+              ) &&
               Math.abs(new Date(m.timestamp).getTime() - messageTime) < 60000
           );
           if (pendingMessage) {
@@ -743,14 +767,44 @@ export default function EmbedPage() {
               try {
                 const history = await apiRef.current.getConversationMessages(conversationId);
                 if (history && history.length > 0) {
-                  const historyMessages: Message[] = history.map((msg: any) => ({
-                    id: msg.id,
-                    text: msg.message_text || msg.text,
-                    sender: (msg.sender_type === 'user' ? 'user' : (msg.sender_type === 'agent' ? 'agent' : 'bot')) as 'user' | 'bot' | 'agent' | 'system',
-                    timestamp: msg.created_at || msg.timestamp,
-                    deliveryStatus: 'delivered' as const
-                  }));
-                  setMessages(historyMessages);
+                  const historyMessages: Message[] = history.map((msg: any) =>
+                    normalizeMessage({
+                      id: msg.id,
+                      text: msg.message_text || msg.text || '',
+                      sender: (msg.sender_type === 'user' ? 'user' : (msg.sender_type === 'agent' ? 'agent' : 'bot')) as 'user' | 'bot' | 'agent' | 'system',
+                      timestamp: msg.created_at || msg.timestamp,
+                      deliveryStatus: 'delivered' as const,
+                      attachments: msg.attachments,
+                      sender_type: msg.sender_type,
+                    })
+                  );
+                  setMessages((prev) => {
+                    const merged = new Map<string, Message>();
+
+                    for (const existing of prev) {
+                      merged.set(existing.id, existing);
+                    }
+
+                    for (const incoming of historyMessages) {
+                      const existing = merged.get(incoming.id);
+                      if (!existing) {
+                        merged.set(incoming.id, incoming);
+                        continue;
+                      }
+
+                      merged.set(incoming.id, {
+                        ...existing,
+                        ...incoming,
+                        text: incoming.text || existing.text,
+                        attachments: incoming.attachments?.length ? incoming.attachments : existing.attachments,
+                        deliveryStatus: incoming.deliveryStatus || existing.deliveryStatus,
+                      });
+                    }
+
+                    return Array.from(merged.values()).sort(
+                      (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+                    );
+                  });
                 }
               } catch (error) {
                 console.warn('[Widget] Failed to load message history:', error);
@@ -1328,7 +1382,6 @@ export default function EmbedPage() {
             }
           : message
       ));
-      URL.revokeObjectURL(previewUrl);
       const response = await apiRef.current.sendMessage('', {
         temp_id: tempId,
         attachments: {
@@ -1343,6 +1396,9 @@ export default function EmbedPage() {
       if (resolvedConversationId && wsRef.current?.isConnected()) {
         wsRef.current.switchToConversationRoom(resolvedConversationId);
       }
+      // Delay cleanup slightly so React and the websocket confirmation path never
+      // race against a revoked blob URL while the optimistic message is replaced.
+      window.setTimeout(() => URL.revokeObjectURL(previewUrl), 60000);
     } catch (err) {
       setMessages((prev) =>
         prev.map((message) =>

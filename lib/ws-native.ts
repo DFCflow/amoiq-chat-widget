@@ -412,13 +412,17 @@ export class ChatWebSocketNative {
       return;
     }
 
+    const roomName = `conversation:${conversationId}`;
+    if (this.currentRoom === roomName && this.conversationId === conversationId) {
+      return;
+    }
+
     // Set up message event listeners BEFORE joining conversation room
     // This ensures we catch messages immediately when we join
     this.setupMessageEventListeners();
 
     // Join conversation room FIRST (before leaving session room)
     // This ensures we're in the room when messages are broadcast
-    const roomName = `conversation:${conversationId}`;
     this.socket.emit('join:conversation', { conversationId });
     this.currentRoom = roomName;
 
@@ -1091,16 +1095,34 @@ export class ChatWebSocketNative {
    * message:new broadcasts BEFORE DB write (no message_id), meta_message_created broadcasts AFTER (with message_id)
    */
   private getMessageKey(data: any): string {
-    // Use content-based key: conversation_id + sender_type + text
-    // This works because IDs will never match between the two events
-    const text = data.text || data.message_text;
+    const conversationId = data.conversation_id || data.conversationId || 'unknown-conversation';
+    const explicitId =
+      data.message_id ||
+      data.messageId ||
+      data.id ||
+      data.temp_id ||
+      data.client_temp_id ||
+      data.metadata?.temp_id;
+
+    if (explicitId) {
+      return `${conversationId}:id:${explicitId}`;
+    }
+
+    const text = data.text || data.message_text || '';
     const sender = data.sender_type || data.sender;
-    const conversationId = data.conversation_id;
+    const rawAttachments = Array.isArray(data.attachments)
+      ? data.attachments
+      : data.attachments?.items;
     
     // Normalize sender to match backend values: 'human', 'ai', 'user'
     const normalizedSender = sender === 'agent' ? 'human' : (sender === 'bot' ? 'ai' : sender);
+    const attachmentSignature = Array.isArray(rawAttachments)
+      ? rawAttachments
+          .map((attachment: any) => attachment?.payload?.url || attachment?.url || attachment?.payload?.filename || attachment?.filename || 'attachment')
+          .join('|')
+      : '';
     
-    return `${conversationId}:${normalizedSender}:${text}`;
+    return `${conversationId}:${normalizedSender}:${text}:${attachmentSignature}`;
   }
 
   /**
