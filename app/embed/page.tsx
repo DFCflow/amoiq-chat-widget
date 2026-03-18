@@ -530,6 +530,8 @@ export default function EmbedPage() {
               m.id === serverTempId
                 ? {
                     ...normalizedMessage,
+                    text: normalizedMessage.text || m.text,
+                    attachments: normalizedMessage.attachments?.length ? normalizedMessage.attachments : m.attachments,
                     sender: m.sender || normalizedMessage.sender,
                     deliveryStatus: 'delivered' as const,
                     timestamp: m.timestamp,
@@ -556,6 +558,8 @@ export default function EmbedPage() {
               m.id === pendingMessage.id
                 ? {
                     ...normalizedMessage,
+                    text: normalizedMessage.text || m.text,
+                    attachments: normalizedMessage.attachments?.length ? normalizedMessage.attachments : m.attachments,
                     sender: m.sender || normalizedMessage.sender,
                     deliveryStatus: 'delivered' as const,
                     timestamp: m.timestamp,
