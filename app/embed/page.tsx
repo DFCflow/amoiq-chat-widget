@@ -5,7 +5,7 @@ import { getTenantId } from '@/lib/tenant';
 import { ChatAPI, UserInfo } from '@/lib/api';
 import { ChatWebSocketNative } from '@/lib/ws-native';
 import { getSessionInfo, hasValidSession, getVisitorId, isConversationExpired, clearConversation, getSenderName, setSenderName, getConversationId, setConversationId } from '@/lib/session';
-import { UploadService } from '@/lib/upload-service';
+import { UploadService, validateWidgetUploadFile } from '@/lib/upload-service';
 import { getRuntimeGatewayApiKey, getRuntimeWidgetToken } from '@/lib/runtime-config';
 import styles from './styles.module.css';
 
@@ -111,6 +111,13 @@ function getAttachmentType(attachment: AttachmentItem): string {
   if (contentType.startsWith('image/')) return 'image';
   if (contentType.startsWith('video/')) return 'video';
   if (contentType.startsWith('audio/')) return 'audio';
+  return 'document';
+}
+
+function inferAttachmentType(mimeType: string): 'image' | 'video' | 'audio' | 'document' {
+  if (mimeType.startsWith('image/')) return 'image';
+  if (mimeType.startsWith('video/')) return 'video';
+  if (mimeType.startsWith('audio/')) return 'audio';
   return 'document';
 }
 
@@ -1246,12 +1253,47 @@ export default function EmbedPage() {
     const file = e.target.files?.[0];
     if (!file) return;
     e.target.value = '';
+
+    const validationError = validateWidgetUploadFile(file);
+    if (validationError) {
+      alert(validationError);
+      return;
+    }
+
     const conversationId = getConversationId();
     if (!conversationId) {
       alert('Send a message first to attach files.');
       return;
     }
     if (!apiRef.current) return;
+
+    const tempId = `temp-${Date.now()}`;
+    const previewUrl = URL.createObjectURL(file);
+    const type = inferAttachmentType(file.type || 'application/octet-stream');
+    const userMessage: Message = {
+      id: tempId,
+      text: '',
+      sender: 'user',
+      timestamp: new Date().toISOString(),
+      deliveryStatus: 'pending',
+      attachments: [{
+        type,
+        payload: {
+          url: previewUrl,
+          filename: file.name,
+          content_type: file.type || 'application/octet-stream',
+          size: file.size,
+        },
+      }],
+    };
+
+    setMessages((prev) => {
+      const updated = [...prev, userMessage];
+      saveMessagesToStorage(updated, Date.now());
+      setShowClearButton(false);
+      return updated;
+    });
+
     setIsUploading(true);
     try {
       const baseUrl = process.env.NEXT_PUBLIC_GATEWAY_URL || process.env.NEXT_PUBLIC_API_URL || 'https://api-gateway-dfcflow.fly.dev';
@@ -1266,16 +1308,23 @@ export default function EmbedPage() {
         ...(websiteInfo.domain ? { 'X-Website-Domain': websiteInfo.domain } : {}),
       }));
       const result = await uploadService.uploadFile(conversationId, file);
-      const type = (file.type.startsWith('image/') ? 'image' : file.type.startsWith('video/') ? 'video' : file.type.startsWith('audio/') ? 'audio' : 'document') as 'image' | 'video' | 'audio' | 'document';
-      const tempId = `temp-${Date.now()}`;
-      const userMessage: Message = {
-        id: tempId,
-        text: `[Attachment: ${result.filename}]`,
-        sender: 'user',
-        timestamp: new Date().toISOString(),
-        deliveryStatus: 'pending',
-      };
-      setMessages((prev) => [...prev, userMessage]);
+      setMessages((prev) => prev.map((message) =>
+        message.id === tempId
+          ? {
+              ...message,
+              attachments: [{
+                type,
+                payload: {
+                  url: result.publicUrl,
+                  filename: result.filename,
+                  content_type: result.contentType,
+                  size: result.size,
+                },
+              }],
+            }
+          : message
+      ));
+      URL.revokeObjectURL(previewUrl);
       const response = await apiRef.current.sendMessage('', {
         temp_id: tempId,
         attachments: {
@@ -1291,6 +1340,13 @@ export default function EmbedPage() {
         wsRef.current.switchToConversationRoom(resolvedConversationId);
       }
     } catch (err) {
+      setMessages((prev) =>
+        prev.map((message) =>
+          message.id === tempId
+            ? { ...message, deliveryStatus: 'failed' as const }
+            : message
+        )
+      );
       console.error('[Widget] File upload failed:', err);
       alert(err instanceof Error ? err.message : 'Failed to upload file.');
     } finally {

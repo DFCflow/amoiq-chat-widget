@@ -38,6 +38,40 @@ export interface CompleteUploadResponse {
 
 export type GetHeaders = () => HeadersInit;
 
+export const WIDGET_UPLOAD_MAX_SIZE = 20 * 1024 * 1024;
+export const WIDGET_UPLOAD_ALLOWED_TYPES = ['image/*', 'video/*', 'audio/*', 'application/pdf'] as const;
+
+function mimeMatches(mimeType: string, pattern: string): boolean {
+  if (pattern === '*/*') return true;
+
+  const [type = '', subtype = ''] = mimeType.split('/');
+  const [patternType = '', patternSubtype = ''] = pattern.split('/');
+
+  if (patternType !== '*' && patternType !== type) {
+    return false;
+  }
+  if (patternSubtype === '*') {
+    return true;
+  }
+
+  return patternSubtype === subtype;
+}
+
+export function validateWidgetUploadFile(file: File): string | null {
+  const mimeType = file.type || 'application/octet-stream';
+
+  if (file.size > WIDGET_UPLOAD_MAX_SIZE) {
+    return `File too large. Max size is ${Math.round(WIDGET_UPLOAD_MAX_SIZE / 1024 / 1024)}MB.`;
+  }
+
+  const allowed = WIDGET_UPLOAD_ALLOWED_TYPES.some((pattern) => mimeMatches(mimeType, pattern));
+  if (!allowed) {
+    return 'Only images, videos, audio files, and PDFs are supported.';
+  }
+
+  return null;
+}
+
 /**
  * Upload service for anonymous Chat Widget users.
  * Uses conversation ID to scope uploads (no auth).
