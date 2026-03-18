@@ -6,7 +6,7 @@ import { ChatAPI, UserInfo } from '@/lib/api';
 import { ChatWebSocketNative } from '@/lib/ws-native';
 import { getSessionInfo, hasValidSession, getVisitorId, isConversationExpired, clearConversation, getSenderName, setSenderName, getConversationId, setConversationId } from '@/lib/session';
 import { UploadService } from '@/lib/upload-service';
-import { getRuntimeGatewayApiKey } from '@/lib/runtime-config';
+import { getRuntimeGatewayApiKey, getRuntimeWidgetToken } from '@/lib/runtime-config';
 import styles from './styles.module.css';
 
 // Force dynamic rendering - no caching
@@ -1161,10 +1161,15 @@ export default function EmbedPage() {
     setIsUploading(true);
     try {
       const baseUrl = process.env.NEXT_PUBLIC_GATEWAY_URL || process.env.NEXT_PUBLIC_API_URL || 'https://api-gateway-dfcflow.fly.dev';
+      const websiteInfo = getWebsiteInfo();
       const apiKey = getRuntimeGatewayApiKey();
+      const widgetToken = getRuntimeWidgetToken();
       const uploadService = new UploadService(baseUrl, () => ({
         'Content-Type': 'application/json',
-        ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
+        ...(widgetToken ? { Authorization: `Bearer ${widgetToken}` } : {}),
+        ...(!widgetToken && apiKey ? { 'X-API-Key': apiKey } : {}),
+        ...(websiteInfo.origin ? { 'X-Website-Origin': websiteInfo.origin } : {}),
+        ...(websiteInfo.domain ? { 'X-Website-Domain': websiteInfo.domain } : {}),
       }));
       const result = await uploadService.uploadFile(conversationId, file);
       const type = (file.type.startsWith('image/') ? 'image' : file.type.startsWith('video/') ? 'video' : file.type.startsWith('audio/') ? 'audio' : 'document') as 'image' | 'video' | 'audio' | 'document';
