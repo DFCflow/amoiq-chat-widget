@@ -5,6 +5,12 @@
  */
 
 import { getSessionInfo, refreshSession, getConversationId, clearConversation, getSenderName } from './session';
+import {
+  getRuntimeCustomerToken,
+  getRuntimePublishableKey,
+  getRuntimeWidgetToken,
+  setRuntimeWidgetToken,
+} from './runtime-config';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_GATEWAY_URL || process.env.NEXT_PUBLIC_API_URL || 'https://api-gateway-dfcflow.fly.dev';
 
@@ -68,6 +74,7 @@ export interface PresenceSessionResponse {
   site_id: string;
   session_id: string;
   ws_token: string;
+  widget_token?: string;
   websocket_url: string;
 }
 
@@ -77,8 +84,9 @@ export class ChatAPI {
   private websiteInfo: WebsiteInfo;
   private userId?: string; // For logged-in users
   private userInfo?: UserInfo; // User information
+  private customerToken?: string;
 
-  constructor(tenantId: string | null, websiteInfo?: WebsiteInfo, userId?: string, userInfo?: UserInfo) {
+  constructor(tenantId: string | null, websiteInfo?: WebsiteInfo, userId?: string, userInfo?: UserInfo, customerToken?: string) {
     this.tenantId = tenantId || null;
     this.baseUrl = API_BASE_URL;
     // Use provided websiteInfo if it has domain/origin, otherwise try to get from URL params
@@ -113,6 +121,7 @@ export class ChatAPI {
     }
     this.userId = userId;
     this.userInfo = userInfo;
+    this.customerToken = customerToken || getRuntimeCustomerToken() || undefined;
   }
 
   /**
@@ -121,6 +130,10 @@ export class ChatAPI {
   setUser(userId: string, userInfo?: UserInfo): void {
     this.userId = userId;
     this.userInfo = userInfo;
+  }
+
+  setCustomerToken(customerToken?: string): void {
+    this.customerToken = customerToken || undefined;
   }
 
   /**
@@ -154,23 +167,33 @@ export class ChatAPI {
     return {};
   }
 
+  private persistWidgetToken(token?: string | null): void {
+    if (token) {
+      setRuntimeWidgetToken(token);
+    }
+  }
+
   /**
-   * Get API headers with tenant authentication
-   * Note: Gateway extracts domain from X-Website-Origin header (or Origin/Referer fallback) and sets X-Tenant-ID itself
-   * We send Authorization header with API key and custom headers with parent domain info
+   * Get API headers with tenant authentication.
+   * Bootstrap endpoints use a publishable key; runtime endpoints prefer the
+   * short-lived widget JWT returned from session/init responses.
    */
-  private getHeaders(): HeadersInit {
+  private getHeaders(options: { bootstrap?: boolean } = {}): HeadersInit {
     const headers: HeadersInit = {
       'Content-Type': 'application/json',
     };
 
-    // Add API key if available (from env or config)
-    // Gateway validates API key, extracts domain from X-Website-Origin header (or Origin/Referer fallback),
-    // queries webchat_integration table for domain → gets tenant_id,
-    // then sets X-Tenant-ID header before forwarding to backend
-    const apiKey = process.env.NEXT_PUBLIC_GATEWAY_API_KEY || process.env.NEXT_PUBLIC_API_KEY;
-    if (apiKey) {
-      headers['Authorization'] = `Bearer ${apiKey}`;
+    const widgetToken =
+      !options.bootstrap && (this.websiteInfo.domain || this.websiteInfo.origin)
+        ? getRuntimeWidgetToken()
+        : null;
+    if (widgetToken) {
+      headers['Authorization'] = `Bearer ${widgetToken}`;
+    } else {
+      const publishableKey = getRuntimePublishableKey();
+      if (publishableKey) {
+        headers['X-API-Key'] = publishableKey;
+      }
     }
 
     // Send parent domain in custom headers for Gateway to use
@@ -208,7 +231,7 @@ export class ChatAPI {
       }
 
       // Add userId if logged in
-      if (this.userId) {
+      if (this.userId && this.customerToken) {
         params.append('userId', this.userId);
       }
 
@@ -291,18 +314,20 @@ export class ChatAPI {
         payload.tenantId = this.tenantId;
       }
 
-      // Add user identification if logged in
+      // Logged-in identity must be backed by a signed customer token.
       const userId = options?.userId || this.userId;
       const userInfo = options?.userInfo || this.userInfo;
+      const customerToken = this.customerToken || getRuntimeCustomerToken();
 
-      if (userId) {
-        // Logged-in user
+      if (customerToken) {
+        payload.customerToken = customerToken;
+      }
+      if (customerToken && userId) {
         payload.userId = userId;
         if (userInfo) {
           payload.userInfo = userInfo;
         }
       }
-      // If no userId, backend treats as anonymous user (uses sessionId + fingerprint)
 
       // Add sender_name if available (from welcome message)
       const senderName = getSenderName();
@@ -375,6 +400,7 @@ export class ChatAPI {
           }
 
           const data = await response.json();
+          this.persistWidgetToken(data.widget_token);
           
           // Check if response indicates conversation is closed
           const wasClosed = data.closed_at || data.conversation_closed;
@@ -458,7 +484,7 @@ export class ChatAPI {
 
       const response = await fetch(`${this.baseUrl}/api/chat/session`, {
         method: 'POST',
-        headers: this.getHeaders(),
+        headers: this.getHeaders({ bootstrap: true }),
         body: JSON.stringify(payload),
       });
 
@@ -482,6 +508,7 @@ export class ChatAPI {
     session_id: string;
     visitor_id: string;
     ws_token: string;
+    widget_token?: string;
     ws_server_url: string;
     tenant_id: string;
     integration_id?: string;
@@ -514,8 +541,10 @@ export class ChatAPI {
         payload.visitorId = visitorId;
       }
 
-      // Add user identification if logged in
-      if (this.userId) {
+      if (this.customerToken) {
+        payload.customerToken = this.customerToken;
+      }
+      if (this.customerToken && this.userId) {
         payload.userId = this.userId;
         if (this.userInfo) {
           payload.userInfo = this.userInfo;
@@ -524,7 +553,7 @@ export class ChatAPI {
 
       const response = await fetch(`${this.baseUrl}/webchat/init`, {
         method: 'POST',
-        headers: this.getHeaders(),
+        headers: this.getHeaders({ bootstrap: true }),
         body: JSON.stringify(payload),
       });
 
@@ -534,6 +563,7 @@ export class ChatAPI {
       }
 
       const data = await response.json();
+      this.persistWidgetToken(data.widget_token || data.ws_token);
       return data;
     } catch (error) {
       console.error('[ChatAPI] Error initializing conversation:', error);
@@ -561,8 +591,10 @@ export class ChatAPI {
         payload.tenantId = this.tenantId;
       }
 
-      // Add user identification if logged in
-      if (this.userId) {
+      if (this.customerToken) {
+        payload.customerToken = this.customerToken;
+      }
+      if (this.customerToken && this.userId) {
         payload.userId = this.userId;
         if (this.userInfo) {
           payload.userInfo = this.userInfo;
@@ -578,7 +610,7 @@ export class ChatAPI {
 
       const response = await fetch(`${this.baseUrl}/webchat/session`, {
         method: 'POST',
-        headers: this.getHeaders(),
+        headers: this.getHeaders({ bootstrap: true }),
         body: JSON.stringify(payload),
       });
 
@@ -588,9 +620,16 @@ export class ChatAPI {
       }
 
       const data = await response.json();
+      this.persistWidgetToken(data.widget_token || data.ws_token);
       return data;
     } catch (error) {
       console.error('[ChatAPI] Error creating presence session:', error);
+      const publishableKey = getRuntimePublishableKey();
+      console.error('[ChatAPI] Presence auth context:', {
+        hasPublishableKey: !!publishableKey,
+        domain: this.websiteInfo?.domain || null,
+        origin: this.websiteInfo?.origin || null,
+      });
       return null;
     }
   }
@@ -613,7 +652,7 @@ export class ChatAPI {
 
       const response = await fetch(`${this.baseUrl}/webchat/open`, {
         method: 'POST',
-        headers: this.getHeaders(),
+        headers: this.getHeaders({ bootstrap: true }),
         body: JSON.stringify(payload),
       });
 

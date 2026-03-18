@@ -7,7 +7,7 @@ Add these two script tags to your HTML page (before the closing `</body>` tag):
 ```html
 <script>
   window.ChatWidgetConfig = {
-    tenantId: "your-tenant-id",
+    publishableKey: "site_public_xxx",
     position: "bottom-right"
   };
 </script>
@@ -47,9 +47,10 @@ Add these two script tags to your HTML page (before the closing `</body>` tag):
 ## Configuration Options
 
 ### Required
-- **`tenantId`** (string): Your unique tenant identifier
+- **`publishableKey`** (string): Per-site public bootstrap key used to initialize the widget
 
 ### Optional
+- **`tenantId`** (string): Optional explicit tenant hint. The gateway will resolve tenant and integration from the website domain when omitted.
 - **`position`** (string): Widget position on screen
   - `"bottom-right"` (default)
   - `"bottom-left"`
@@ -57,13 +58,15 @@ Add these two script tags to your HTML page (before the closing `</body>` tag):
   - `"top-left"`
 - **`baseUrl`** (string): Override widget server URL (default: auto-detected)
 - **`siteId`** (string): Optional site identifier for multi-site tenants. If not provided, the widget automatically detects the domain from the current website.
+- **`customerToken`** (string): Optional signed token from your backend for trusted logged-in visitors
+- **`userId` / `userInfo`**: Optional display hints. These are not trusted for authentication unless paired with a valid `customerToken`.
 
 ### Example with All Options
 
 ```html
 <script>
   window.ChatWidgetConfig = {
-    tenantId: "my-company-123",
+    publishableKey: "site_public_xxx",
     position: "bottom-right",
     baseUrl: "https://webchat.amoiq.com",  // Optional
     siteId: "site-456"                     // Optional: for multi-site tenants
@@ -163,7 +166,7 @@ Add to your theme's `footer.php` (before `</body>`):
 
 ## Testing
 
-1. Replace `"your-tenant-id"` with your actual tenant ID
+1. Replace `"site_public_xxx"` with your actual publishable key
 2. Save and refresh your page
 3. You should see a blue chat bubble in the bottom-right corner
 4. Click it to open the chat interface
@@ -176,7 +179,7 @@ Add to your theme's `footer.php` (before `</body>`):
 - Make sure script loads (check Network tab)
 
 ### "Invalid configuration" error
-- Ensure `tenantId` is provided in `ChatWidgetConfig`
+- Ensure `publishableKey` is provided in `ChatWidgetConfig`
 - Check that the config script runs before the widget script
 
 ### Widget appears but can't connect
@@ -193,4 +196,11 @@ The widget automatically:
 - ✅ Works on mobile and desktop
 
 No additional CSS or JavaScript needed!
+
+## Auth Notes
+
+- The widget sends `X-Website-Domain` and `X-Website-Origin` so the gateway can resolve the correct tenant/integration from the host website domain.
+- The browser-side `publishableKey` is public and should be scoped to a single website integration.
+- After bootstrap, the gateway returns short-lived widget JWTs for runtime HTTP and Socket.IO use.
+- For logged-in visitors, generate a short-lived signed `customerToken` on your backend and pass it into `ChatWidgetConfig.customerToken`.
 

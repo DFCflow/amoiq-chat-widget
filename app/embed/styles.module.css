@@ -350,9 +350,7 @@
   z-index: 100;
   opacity: 0;
   transition: opacity 0.2s, width 0.2s;
-}
-
-.swipeOverlayActive {
+}.swipeOverlayActive {
   opacity: 1;
   width: 20px;
 }

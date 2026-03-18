@@ -4,8 +4,9 @@ import { useEffect, useState, useRef } from 'react';
 import { getTenantId } from '@/lib/tenant';
 import { ChatAPI, UserInfo } from '@/lib/api';
 import { ChatWebSocketNative } from '@/lib/ws-native';
-import { getSessionInfo, hasValidSession, getVisitorId, isConversationExpired, clearConversation, getSenderName, setSenderName, getConversationId } from '@/lib/session';
+import { getSessionInfo, hasValidSession, getVisitorId, isConversationExpired, clearConversation, getSenderName, setSenderName, getConversationId, setConversationId } from '@/lib/session';
 import { UploadService } from '@/lib/upload-service';
+import { getRuntimeGatewayApiKey } from '@/lib/runtime-config';
 import styles from './styles.module.css';
 
 // Force dynamic rendering - no caching
@@ -107,6 +108,7 @@ function clearMessagesFromStorage(): void {
 }
 
 export default function EmbedPage() {
+  const [isHydrated, setIsHydrated] = useState(false);
   const [tenantId, setTenantId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputValue, setInputValue] = useState('');
@@ -235,7 +237,7 @@ export default function EmbedPage() {
    * Get user info from URL params or parent window
    * Supports logged-in users with userId and userInfo
    */
-  const getUserInfo = (): { userId?: string; userInfo?: UserInfo } => {
+  const getUserInfo = (): { userId?: string; userInfo?: UserInfo; customerToken?: string } => {
     const params = new URLSearchParams(window.location.search);
     
     // Try to get from URL params
@@ -243,6 +245,7 @@ export default function EmbedPage() {
     const userName = params.get('userName');
     const userEmail = params.get('userEmail');
     const userPhone = params.get('userPhone');
+    const customerToken = params.get('customerToken') || params.get('customer_token');
     
     if (userId) {
       const userInfo: UserInfo = {};
@@ -250,7 +253,15 @@ export default function EmbedPage() {
       if (userEmail) userInfo.email = userEmail;
       if (userPhone) userInfo.phone = userPhone;
       
-      return { userId, userInfo: Object.keys(userInfo).length > 0 ? userInfo : undefined };
+      return {
+        userId,
+        userInfo: Object.keys(userInfo).length > 0 ? userInfo : undefined,
+        customerToken: customerToken || undefined,
+      };
+    }
+
+    if (customerToken) {
+      return { customerToken };
     }
     
     // Try to get from parent window (if embedded)
@@ -261,6 +272,12 @@ export default function EmbedPage() {
           return {
             userId: parentConfig.userId,
             userInfo: parentConfig.userInfo,
+            customerToken: parentConfig.customerToken || parentConfig.customer_token,
+          };
+        }
+        if (parentConfig?.customerToken || parentConfig?.customer_token) {
+          return {
+            customerToken: parentConfig.customerToken || parentConfig.customer_token,
           };
         }
       } catch (e) {
@@ -476,6 +493,10 @@ export default function EmbedPage() {
   };
 
   useEffect(() => {
+    setIsHydrated(true);
+  }, []);
+
+  useEffect(() => {
     // Get tenant ID from URL params (support both 'tenantId' and 'tenant')
     // tenantId is optional - Gateway will resolve it from domain if not provided
     const params = new URLSearchParams(window.location.search);
@@ -505,7 +526,7 @@ export default function EmbedPage() {
     }
     
     // Get user info (for logged-in users)
-    const { userId, userInfo } = getUserInfo();
+    const { userId, userInfo, customerToken } = getUserInfo();
     const sessionInfo = getSessionInfo();
     
     // Check if sender name exists
@@ -539,7 +560,7 @@ export default function EmbedPage() {
     
     // Initialize API client with website info and user info
     // Pass tenantId (can be null) - Gateway will resolve from domain if not provided
-    apiRef.current = new ChatAPI(tid, websiteInfo, userId, userInfo);
+    apiRef.current = new ChatAPI(tid, websiteInfo, userId, userInfo, customerToken);
     
     // Initialize presence session on page load
     initializePresenceSession();
@@ -595,7 +616,7 @@ export default function EmbedPage() {
       } else {
         // Create WebSocket client for presence
         const websiteInfo = getWebsiteInfo();
-        const { userId, userInfo } = getUserInfo();
+        const { userId, userInfo, customerToken } = getUserInfo();
         const params = new URLSearchParams(window.location.search);
         const tid = params.get('tenantId') || params.get('tenant');
         
@@ -638,7 +659,7 @@ export default function EmbedPage() {
             addSystemMessage('This conversation has been closed due to inactivity. You can start a new conversation at any time.');
           },
           onMessage: createMessageHandler(),
-        }, websiteInfo, false, userId, userInfo);
+        }, websiteInfo, false, userId, userInfo, customerToken);
         
         await wsRef.current.connectPresence(
           presenceResponse.ws_token,
@@ -1072,12 +1093,19 @@ export default function EmbedPage() {
           });
         }
         
+        // Persist conversation_id as soon as the HTTP API returns it so follow-up
+        // sends and uploads can immediately target the active conversation.
+        const conversationId =
+          response.conversation_id ||
+          (response.message as { conversation_id?: string } | undefined)?.conversation_id ||
+          getConversationId();
+        if (conversationId && conversationId !== getConversationId()) {
+          setConversationId(conversationId);
+        }
+
         // 🔍 IMPORTANT: After sending via HTTP API, ensure WebSocket is in conversation room
         // The HTTP API might have created/updated a conversation, so we need to join the conversation room
         // to receive meta_message_created events
-        // Check for conversation_id in response message or use stored one
-        const conversationId = (response.message as { conversation_id?: string } | undefined)?.conversation_id || getConversationId();
-        
         if (conversationId && wsRef.current) {
           if (wsRef.current.isConnected()) {
             // Switch to conversation room to receive meta_message_created events
@@ -1133,11 +1161,10 @@ export default function EmbedPage() {
     setIsUploading(true);
     try {
       const baseUrl = process.env.NEXT_PUBLIC_GATEWAY_URL || process.env.NEXT_PUBLIC_API_URL || 'https://api-gateway-dfcflow.fly.dev';
+      const apiKey = getRuntimeGatewayApiKey();
       const uploadService = new UploadService(baseUrl, () => ({
         'Content-Type': 'application/json',
-        ...(process.env.NEXT_PUBLIC_GATEWAY_API_KEY || process.env.NEXT_PUBLIC_API_KEY
-          ? { Authorization: `Bearer ${process.env.NEXT_PUBLIC_GATEWAY_API_KEY || process.env.NEXT_PUBLIC_API_KEY}` }
-          : {}),
+        ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
       }));
       const result = await uploadService.uploadFile(conversationId, file);
       const type = (file.type.startsWith('image/') ? 'image' : file.type.startsWith('video/') ? 'video' : file.type.startsWith('audio/') ? 'audio' : 'document') as 'image' | 'video' | 'audio' | 'document';
@@ -1157,6 +1184,13 @@ export default function EmbedPage() {
         },
       });
       if (!response.success) throw new Error(response.error);
+      const resolvedConversationId = response.conversation_id || getConversationId();
+      if (resolvedConversationId && resolvedConversationId !== getConversationId()) {
+        setConversationId(resolvedConversationId);
+      }
+      if (resolvedConversationId && wsRef.current?.isConnected()) {
+        wsRef.current.switchToConversationRoom(resolvedConversationId);
+      }
     } catch (err) {
       console.error('[Widget] File upload failed:', err);
       alert(err instanceof Error ? err.message : 'Failed to upload file.');
@@ -1301,7 +1335,7 @@ export default function EmbedPage() {
               style={{ display: 'none' }}
               aria-hidden
             />
-            {getConversationId() && (
+            {isHydrated && getConversationId() && (
               <button
                 type="button"
                 onClick={() => fileInputRef.current?.click()}

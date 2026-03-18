@@ -118,10 +118,12 @@
       urlParams.set('tenantId', tenantId);
     }
     
-    // Add website info from current page
+    // Add website info from current page (allow overrides from config)
     if (typeof window !== 'undefined') {
-      urlParams.set('domain', window.location.hostname);
-      urlParams.set('origin', window.location.origin);
+      const resolvedDomain = normalizeDomain(config.domain || window.location.hostname);
+      const resolvedOrigin = config.origin || window.location.origin;
+      urlParams.set('domain', resolvedDomain);
+      urlParams.set('origin', resolvedOrigin);
       urlParams.set('url', window.location.href);
       if (document.referrer) {
         urlParams.set('referrer', document.referrer);
@@ -131,6 +133,40 @@
     // Add optional siteId from config if provided
     if (config.siteId) {
       urlParams.set('siteId', config.siteId);
+    }
+
+    // Runtime bootstrap key support:
+    // Useful when the same widget bundle is reused across environments
+    // and the publishable key should be injected at embed-time.
+    const publishableKey =
+      config.publishableKey ||
+      config.publishable_key ||
+      config.siteKey ||
+      config.site_key ||
+      config.apiKey ||
+      config.api_key;
+    if (publishableKey) {
+      urlParams.set('publishableKey', publishableKey);
+      // Keep the legacy parameter during migration.
+      urlParams.set('apiKey', publishableKey);
+    }
+
+    // Forward signed customer identity and display hints into the iframe so
+    // cross-origin embeds do not need same-origin access to the parent page.
+    if (config.customerToken || config.customer_token) {
+      urlParams.set('customerToken', config.customerToken || config.customer_token);
+    }
+    if (config.userId) {
+      urlParams.set('userId', config.userId);
+    }
+    if (config.userName || (config.userInfo && config.userInfo.name)) {
+      urlParams.set('userName', config.userName || config.userInfo.name);
+    }
+    if (config.userEmail || (config.userInfo && config.userInfo.email)) {
+      urlParams.set('userEmail', config.userEmail || config.userInfo.email);
+    }
+    if (config.userPhone || (config.userInfo && config.userInfo.phone)) {
+      urlParams.set('userPhone', config.userPhone || config.userInfo.phone);
     }
     
     iframe.src = `${baseUrl}/embed?${urlParams.toString()}`;
@@ -257,6 +293,28 @@
       }
     }
     return window.location.origin;
+  }
+
+  function normalizeDomain(domain) {
+    if (!domain || typeof domain !== 'string') return '';
+    var normalized = domain.trim().toLowerCase();
+    if (normalized.indexOf('://') !== -1) {
+      try {
+        normalized = new URL(normalized).hostname;
+      } catch (_e) {
+        // Keep best-effort fallback value.
+      }
+    }
+    if (normalized.indexOf('/') !== -1) {
+      normalized = normalized.split('/')[0];
+    }
+    if (normalized.indexOf(':') !== -1) {
+      normalized = normalized.split(':')[0];
+    }
+    if (normalized.indexOf('www.') === 0) {
+      normalized = normalized.substring(4);
+    }
+    return normalized;
   }
 
   // Initialize when DOM is ready

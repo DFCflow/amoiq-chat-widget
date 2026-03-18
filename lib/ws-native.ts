@@ -5,6 +5,11 @@
 
 import { io, Socket } from 'socket.io-client';
 import { getSessionInfo, refreshSession, getConversationId, setConversationId, getVisitorId, isConversationExpired, clearConversation, getSenderName } from './session';
+import {
+  getRuntimeCustomerToken,
+  getRuntimePublishableKey,
+  setRuntimeWidgetToken,
+} from './runtime-config';
 
 export interface OnlineUser {
   userId: string;
@@ -47,6 +52,7 @@ export interface ConversationInitResponse {
   session_id: string;
   visitor_id: string;
   ws_token: string;
+  widget_token?: string;
   ws_server_url: string;
   tenant_id: string;
   integration_id?: string;
@@ -80,6 +86,7 @@ export class ChatWebSocketNative {
   private currentRoom?: string; // Current WebSocket room (session:{session_id} or conversation:{conversation_id})
   private processedMessageKeys = new Map<string, number>(); // messageKey -> timestamp for deduplication
   private readonly MESSAGE_CACHE_TTL = 60000; // 60 seconds - covers backend processing delays
+  private customerToken?: string;
 
   constructor(
     tenantId: string | null,
@@ -87,13 +94,15 @@ export class ChatWebSocketNative {
     websiteInfo?: WebsiteInfo,
     isAdmin: boolean = false,
     userId?: string,
-    userInfo?: UserInfo
+    userInfo?: UserInfo,
+    customerToken?: string
   ) {
     this.tenantId = tenantId || null;
     this.callbacks = callbacks;
     this.isAdmin = isAdmin;
     this.userId = userId;
     this.userInfo = userInfo;
+    this.customerToken = customerToken || getRuntimeCustomerToken() || undefined;
     
     // Initialize website info
     // Use provided websiteInfo if it has domain/origin, otherwise try to get from URL params
@@ -540,20 +549,23 @@ export class ChatWebSocketNative {
         payload.visitorId = storedVisitorId;
       }
 
-      if (this.userId) {
+      if (this.customerToken) {
+        payload.customerToken = this.customerToken;
+      }
+      if (this.customerToken && this.userId) {
         payload.userId = this.userId;
         if (this.userInfo) {
           payload.userInfo = this.userInfo;
         }
       }
 
-      const apiKey = process.env.NEXT_PUBLIC_GATEWAY_API_KEY || process.env.NEXT_PUBLIC_API_KEY;
+      const publishableKey = getRuntimePublishableKey();
       const headers: HeadersInit = {
         'Content-Type': 'application/json',
       };
 
-      if (apiKey) {
-        headers['Authorization'] = `Bearer ${apiKey}`;
+      if (publishableKey) {
+        headers['X-API-Key'] = publishableKey;
       }
 
       // Send parent domain in custom headers for Gateway to use
@@ -581,6 +593,7 @@ export class ChatWebSocketNative {
       }
 
       const data: ConversationInitResponse = await response.json();
+      setRuntimeWidgetToken(data.widget_token || data.ws_token);
       
       // Check if conversation is closed
       if (data.closed_at) {

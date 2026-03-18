@@ -29,22 +29,22 @@ graph TB
     Widget -->|1. Load| Session
     Session -->|2. Get/Create| SessionID[sessionId + fingerprint]
     Widget -->|3. Initialize| API
-    Widget -->|4. POST /webchat/init<br/>Authorization: Bearer api-key| Gateway
-    Gateway -->|5. Verify API Key| Auth
-    Auth -->|6. Valid| Router
+    Widget -->|4. POST /webchat/session or /webchat/init<br/>X-API-Key + X-Website-Domain| Gateway
+    Gateway -->|5. Validate publishable key + domain| Auth
+    Auth -->|6. Resolve tenant/integration| Router
     Router -->|7. POST /conversations| APIServer
     APIServer -->|8. Create/Find Conversation| DB
-    APIServer -->|9. Generate JWT Token| JWT[JWT with conversation_id]
+    APIServer -->|9. Generate widget JWTs| JWT[WidgetJwt and WsJwt]
     APIServer -->|10. Return| Gateway
-    Gateway -->|11. {conversation_id, ws_token}| Widget
-    Widget -->|12. Connect WebSocket<br/>wss://gateway/ws?token=JWT| Gateway
+    Gateway -->|11. {widget_token, ws_token}| Widget
+    Widget -->|12. Connect SocketIO<br/>Authorization Bearer ws_token| Gateway
 
     %% HTTP Message Flow
     Widget -->|5. Send Message| API
     API -->|6. Add sessionId + fingerprint| Payload[Message Payload]
-    API -->|7. POST /webchat/message<br/>Authorization: Bearer api-key| Gateway
-    Gateway -->|8. Verify API Key| Auth
-    Auth -->|9. Valid| Router
+    API -->|7. POST /webchat/message<br/>Authorization: Bearer widget-jwt| Gateway
+    Gateway -->|8. Validate widget JWT| Auth
+    Auth -->|9. Tenant already scoped| Router
     Router -->|10. Route Request| APIServer
     APIServer -->|11. Process Message<br/>Determine User Type| UserType{User Type?}
     UserType -->|userId present| LoggedIn[Logged-in User]
@@ -122,9 +122,14 @@ sequenceDiagram
     participant WS as WebSocket Server
     participant R as Redis
 
-    Note over W,R: Anonymous User Flow
-    W->>G: POST /webchat/message<br/>Authorization: Bearer api-key<br/>sessionId + fingerprint
-    G->>G: Verify API Key
+    Note over W,R: Bootstrap Flow
+    W->>G: POST /webchat/session<br/>X-API-Key + X-Website-Domain
+    G->>G: Validate publishable key + domain
+    G-->>W: ws_token + widget_token
+
+    Note over W,R: Anonymous Runtime Flow
+    W->>G: POST /webchat/message<br/>Authorization: Bearer widget-jwt<br/>sessionId + fingerprint
+    G->>G: Validate widget JWT
     G->>B: Route Request
     B->>B: Check sessionId in Redis
     B->>R: GET session:sessionId
@@ -139,19 +144,20 @@ sequenceDiagram
     G-->>W: Success
 
     Note over W,R: Logged-in User Flow
-    W->>G: POST /webchat/message<br/>Authorization: Bearer api-key<br/>userId + userInfo
-    G->>G: Verify API Key
+    W->>G: POST /webchat/init<br/>X-API-Key + customerToken
+    G->>G: Verify customerToken + mint widget JWT
+    W->>G: POST /webchat/message<br/>Authorization: Bearer widget-jwt
     G->>B: Route Request
-    B->>B: Use userId (logged-in)
+    B->>B: Use trusted userId from gateway/widget JWT
     B->>B: Save Message to DB
     B-->>G: Response
     G-->>W: Success
 
     Note over W,R: WebSocket Connection
-    W->>G: Connect WebSocket<br/>auth: { apiKey }
-    G->>G: Verify API Key
+    W->>G: Connect SocketIO<br/>auth: { token: ws_token }
+    G->>G: Verify ws_token
     G->>WS: Proxy Connection
-    WS->>WS: Generate/Verify JWT
+    WS->>WS: Verify JWT
     WS->>R: Track Connection<br/>HSET online_users:tenantId
     WS-->>W: Connected
 ```
