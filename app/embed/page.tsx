@@ -221,6 +221,8 @@ export default function EmbedPage() {
   const [nameInputValue, setNameInputValue] = useState('');
   const [isUploading, setIsUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const nameInputRef = useRef<HTMLInputElement>(null);
+  const chatInputRef = useRef<HTMLInputElement>(null);
   const [showClearButton, setShowClearButton] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -237,6 +239,46 @@ export default function EmbedPage() {
     swiping: false,
     translateX: 0,
   });
+
+  const isMobileComposer = () => {
+    if (typeof window === 'undefined') return false;
+    const hasCoarsePointer = window.matchMedia?.('(pointer: coarse)').matches ?? false;
+    return hasCoarsePointer || window.innerWidth < 768;
+  };
+
+  const syncContainerToViewport = () => {
+    if (typeof window === 'undefined') return;
+    const target = containerRef.current;
+    if (!target) return;
+
+    const vv = window.visualViewport;
+    const viewportHeight = Math.round(vv?.height ?? window.innerHeight);
+    const viewportOffsetTop = Math.max(0, Math.round(vv?.offsetTop ?? 0));
+
+    target.style.top = `${viewportOffsetTop}px`;
+    target.style.height = `${viewportHeight}px`;
+    target.style.bottom = 'auto';
+  };
+
+  const resetAfterKeyboardClose = (input?: HTMLInputElement | null) => {
+    if (typeof window === 'undefined' || !isMobileComposer()) return;
+
+    input?.blur();
+    if (document.activeElement instanceof HTMLElement) {
+      document.activeElement.blur();
+    }
+
+    const resetViewport = () => {
+      window.scrollTo(0, 0);
+      document.documentElement.scrollTop = 0;
+      document.body.scrollTop = 0;
+      syncContainerToViewport();
+    };
+
+    requestAnimationFrame(resetViewport);
+    window.setTimeout(resetViewport, 120);
+    window.setTimeout(resetViewport, 320);
+  };
 
   /**
    * Get website info from parent window or detect from current context
@@ -877,6 +919,7 @@ export default function EmbedPage() {
     setSenderName(name);
     setSenderNameState(name);
     setNameInputValue('');
+    resetAfterKeyboardClose(nameInputRef.current);
     
     // Show personalized greeting
     addSystemMessage(`Hi ${name}, how can I help you today?`);
@@ -1144,13 +1187,19 @@ export default function EmbedPage() {
     };
     const handleViewportChange = () => {
       const vv = window.visualViewport;
-      const isKeyboard = vv ? vv.height < window.innerHeight : false;
+      const isKeyboard = vv ? vv.height < window.innerHeight - 120 : false;
+      syncContainerToViewport();
       if (!isKeyboard) {
         baseWidth = window.innerWidth;
         applyWidth();
+        requestAnimationFrame(() => {
+          window.scrollTo(0, 0);
+          syncContainerToViewport();
+        });
       }
     };
     applyWidth();
+    syncContainerToViewport();
     window.addEventListener('resize', handleViewportChange);
     if (window.visualViewport) {
       window.visualViewport.addEventListener('resize', handleViewportChange);
@@ -1190,6 +1239,7 @@ export default function EmbedPage() {
 
     const messageText = inputValue.trim();
     setInputValue('');
+    resetAfterKeyboardClose(chatInputRef.current);
 
     const tempId = `temp-${Date.now()}`;
     const now = new Date().toISOString();
@@ -1583,6 +1633,7 @@ export default function EmbedPage() {
         {chatState === 'name_prompt' ? (
           <>
             <input
+              ref={nameInputRef}
               type="text"
               value={nameInputValue}
               onChange={(e) => setNameInputValue(e.target.value)}
@@ -1629,6 +1680,7 @@ export default function EmbedPage() {
               </button>
             )}
             <input
+              ref={chatInputRef}
               type="text"
               value={inputValue}
               onChange={(e) => setInputValue(e.target.value)}
