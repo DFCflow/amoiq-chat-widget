@@ -1491,35 +1491,36 @@ export default function EmbedPage() {
   return (
     <div ref={containerRef} className={styles.container}>
       <div className={styles.header}>
-        <h3 className={styles.title}>Chat Support</h3>
+        <span
+          className={`${styles.statusDot} ${isConnected ? styles.statusDotOn : styles.statusDotOff}`}
+          aria-hidden
+        />
+        <h3 className={styles.title}>Amoiq AI</h3>
+        <span
+          className={`${styles.status} ${isConnected ? styles.statusConnected : styles.statusDisconnected}`}
+          title={wsError || undefined}
+        >
+          {isConnected ? 'Active' : wsError ? 'Offline' : 'Offline'}
+        </span>
         {showClearButton && messages.length > 0 && (
-          <button 
-            className={styles.clearButton} 
-            onClick={handleClearHistory} 
+          <button
+            className={styles.clearButton}
+            onClick={handleClearHistory}
             aria-label="Clear chat history"
             title="Clear chat history"
           >
-            Clear History
+            Clear
           </button>
         )}
         <button className={styles.closeButton} onClick={handleClose} aria-label="Close">
           ×
         </button>
-        <div className={styles.status}>
-          {isConnected ? (
-            <span className={styles.statusConnected}>● Online</span>
-          ) : wsError ? (
-            <span className={styles.statusDisconnected} title={wsError}>● Offline (API only)</span>
-          ) : (
-            <span className={styles.statusDisconnected}>● Offline</span>
-          )}
-        </div>
       </div>
 
       <div ref={messagesContainerRef} className={styles.messages}>
         {messages.length === 0 ? (
           <div className={styles.emptyState}>
-            <p>Start a conversation</p>
+            <p>Amoiq AI is observing your system...</p>
           </div>
         ) : (
           messages.map((message) => {
@@ -1540,6 +1541,12 @@ export default function EmbedPage() {
                   message.sender === 'user' ? styles.messageUser : styles.messageBot
                 }`}
               >
+                {message.sender !== 'user' ? (
+                  <div className={styles.botAvatar} aria-hidden>
+                    <span className={styles.botAvatarDot} />
+                  </div>
+                ) : null}
+                <div className={styles.messageColumn}>
                 <div className={styles.messageBubble}>
                   {message.text ? (
                     <div className={styles.messageContent}>{message.text}</div>
@@ -1622,6 +1629,7 @@ export default function EmbedPage() {
                     </div>
                   )}
                 </div>
+                </div>
               </div>
             );
           })
@@ -1643,7 +1651,7 @@ export default function EmbedPage() {
                   handleNameSubmit();
                 }
               }}
-              placeholder="Enter your name..."
+              placeholder="Your name..."
               className={styles.input}
               disabled={isLoading}
               autoFocus
@@ -1654,7 +1662,7 @@ export default function EmbedPage() {
               className={styles.sendButton}
               aria-label="Submit name"
             >
-              →
+              Send
             </button>
           </>
         ) : (
@@ -1690,7 +1698,7 @@ export default function EmbedPage() {
                   handleSend();
                 }
               }}
-              placeholder={conversationClosed ? "Type a message to reopen conversation..." : "Type a message..."}
+              placeholder={conversationClosed ? "Send a message to reopen..." : "Ask Amoiq anything..."}
               className={styles.input}
               disabled={isLoading}
             />
@@ -1700,7 +1708,7 @@ export default function EmbedPage() {
               className={styles.sendButton}
               aria-label="Send message"
             >
-              →
+              Send
             </button>
           </>
         )}

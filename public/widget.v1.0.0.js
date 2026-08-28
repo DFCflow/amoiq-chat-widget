@@ -180,19 +180,18 @@
         border-radius: 0;
         box-shadow: none;
         display: none;
-        background: white;
+        background: #f6f1e8;
         z-index: 999999;
       `;
     } else {
-      // Desktop: normal popup widget
       iframe.style.cssText = `
         width: 380px;
         height: 600px;
         border: none;
-        border-radius: 12px;
-        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+        border-radius: 28px;
+        box-shadow: 0 24px 80px rgba(13, 13, 13, 0.08);
         display: none;
-        background: white;
+        background: #f6f1e8;
       `;
     }
     container.appendChild(iframe);
