@@ -62,7 +62,7 @@ Add these two script tags to your HTML page (before the closing `</body>` tag):
 - **`userId` / `userInfo`**: Optional display hints. These are not trusted for authentication unless paired with a valid `customerToken`.
 - **`color`** (string): Optional solid bubble hex (`"#1A1A1A"`). Alias: `bubbleColor`, `primaryColor`.
 - **`colors`** (string[] | string): Optional 1–3 hex stops for the bubble gradient, e.g. `["#CF8360", "#B5A2C6", "#6B84C5"]`. Alias: `bubbleColors`. Omit to use the Amo IQ logo default.
-- **`iconColor`** (string): Optional spark hex. If omitted, ink `#0d0d0d` on light bubbles and white on dark ones.
+- **`iconColor`** (string): Optional spark hex. If omitted, the Amo IQ sparkle uses the logo gradient on the default cream bubble, and white on dark custom bubbles.
 
 You can also set `data-color`, `data-colors` (comma-separated), or `data-icon-color` on the loader `<script>` tag. `ChatWidgetConfig` wins when both are present.
 
