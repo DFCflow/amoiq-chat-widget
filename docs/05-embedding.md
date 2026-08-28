@@ -60,6 +60,21 @@ Add these two script tags to your HTML page (before the closing `</body>` tag):
 - **`siteId`** (string): Optional site identifier for multi-site tenants. If not provided, the widget automatically detects the domain from the current website.
 - **`customerToken`** (string): Optional signed token from your backend for trusted logged-in visitors
 - **`userId` / `userInfo`**: Optional display hints. These are not trusted for authentication unless paired with a valid `customerToken`.
+- **`color`** (string): Optional solid bubble hex (`"#1A1A1A"`). Alias: `bubbleColor`, `primaryColor`.
+- **`colors`** (string[] | string): Optional 1–3 hex stops for the bubble gradient, e.g. `["#CF8360", "#B5A2C6", "#6B84C5"]`. Alias: `bubbleColors`. Omit to use the Amo IQ logo default.
+- **`iconColor`** (string): Optional spark hex. If omitted, ink `#0d0d0d` on light bubbles and white on dark ones.
+
+You can also set `data-color`, `data-colors` (comma-separated), or `data-icon-color` on the loader `<script>` tag. `ChatWidgetConfig` wins when both are present.
+
+```html
+<script>
+  window.ChatWidgetConfig = {
+    publishableKey: "site_public_xxx",
+    position: "bottom-right",
+    colors: ["#CF8360", "#B5A2C6", "#6B84C5"]
+  };
+</script>
+```
 
 ### Example with All Options
 
