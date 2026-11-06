@@ -3,7 +3,9 @@
  * POST /api/gw/v1/webchat/conversations/:conversationId/upload/init -> PUT to S3 -> POST .../upload/complete
  */
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_GATEWAY_URL || process.env.NEXT_PUBLIC_API_URL || 'https://api-gateway-dfcflow.fly.dev';
+import { GATEWAY_BASE_URL } from './gateway-url';
+
+const API_BASE_URL = GATEWAY_BASE_URL;
 
 export interface UploadResult {
   publicUrl: string;

@@ -4,6 +4,7 @@
  * Production-ready with session management and user identification
  */
 
+import { GATEWAY_BASE_URL } from './gateway-url';
 import { getSessionInfo, refreshSession, getConversationId, clearConversation, getSenderName } from './session';
 import {
   getRuntimeCustomerToken,
@@ -12,7 +13,7 @@ import {
   setRuntimeWidgetToken,
 } from './runtime-config';
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_GATEWAY_URL || process.env.NEXT_PUBLIC_API_URL || 'https://api-gateway-dfcflow.fly.dev';
+const API_BASE_URL = GATEWAY_BASE_URL;
 
 export interface Message {
   id: string;

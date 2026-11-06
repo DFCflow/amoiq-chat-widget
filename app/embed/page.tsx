@@ -1,5 +1,6 @@
 'use client';
 
+import { GATEWAY_BASE_URL } from '@/lib/gateway-url';
 import { useEffect, useState, useRef } from 'react';
 import { getTenantId } from '@/lib/tenant';
 import { ChatAPI, UserInfo } from '@/lib/api';
@@ -1404,7 +1405,7 @@ export default function EmbedPage() {
 
     setIsUploading(true);
     try {
-      const baseUrl = process.env.NEXT_PUBLIC_GATEWAY_URL || process.env.NEXT_PUBLIC_API_URL || 'https://api-gateway-dfcflow.fly.dev';
+      const baseUrl = GATEWAY_BASE_URL;
       const websiteInfo = getWebsiteInfo();
       const apiKey = getRuntimeGatewayApiKey();
       const widgetToken = getRuntimeWidgetToken();

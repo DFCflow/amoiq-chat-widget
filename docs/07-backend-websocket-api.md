@@ -13,7 +13,7 @@ This document describes the backend API endpoints and WebSocket events required 
 
 All API requests go through the Gateway:
 ```
-https://api-gateway-dfcflow.fly.dev
+https://gw.communication.amilogy.com
 ```
 
 Configure via environment variable:
