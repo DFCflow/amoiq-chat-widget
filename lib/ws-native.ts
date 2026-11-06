@@ -3,6 +3,7 @@
  * Connects directly to Socket.IO server using ws_server_url from /webchat/init response
  */
 
+import { GATEWAY_BASE_URL } from './gateway-url';
 import { io, Socket } from 'socket.io-client';
 import { getSessionInfo, refreshSession, getConversationId, setConversationId, getVisitorId, isConversationExpired, clearConversation, getSenderName } from './session';
 import {
@@ -141,7 +142,7 @@ export class ChatWebSocketNative {
     this.userInfo = userInfo;
     
     // Get Gateway URL for /webchat/init endpoint
-    this.gatewayUrl = process.env.NEXT_PUBLIC_GATEWAY_URL || process.env.NEXT_PUBLIC_API_URL || 'https://api-gateway-dfcflow.fly.dev';
+    this.gatewayUrl = GATEWAY_BASE_URL;
   }
 
   /**

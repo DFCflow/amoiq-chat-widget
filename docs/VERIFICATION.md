@@ -52,7 +52,7 @@ All documentation has been verified against the code implementation. The followi
    - `NEXT_PUBLIC_GATEWAY_URL` ✅
    - `NEXT_PUBLIC_GATEWAY_API_KEY` ✅
    - Fallback to `NEXT_PUBLIC_API_KEY` ✅
-   - Default URL: `https://api-gateway-dfcflow.fly.dev` ✅
+   - Default URL: `https://gw.communication.amilogy.com` ✅
 
 6. **Authentication Flow** - 100% match
    - Gateway uses API key (Bearer token) ✅

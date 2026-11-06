@@ -8,7 +8,7 @@ Complete API reference for the Amoiq Chat Widget backend services.
 
 All API requests go through the Gateway. The default URL in the code is:
 ```
-https://api-gateway-dfcflow.fly.dev
+https://gw.communication.amilogy.com
 ```
 
 Configure via environment variable:
